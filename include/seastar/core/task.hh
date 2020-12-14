@@ -25,21 +25,45 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/util/backtrace.hh>
 
+#ifdef SEASTAR_DEADLOCK_DETECTION
+#include <list>
 namespace seastar {
+class task;
+namespace internal {
+    std::list<seastar::task*>& task_list();
+}
+}
+#endif
 
+namespace seastar {
 class task {
     scheduling_group _sg;
 #ifdef SEASTAR_TASK_BACKTRACE
     shared_backtrace _bt;
+#endif
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    std::list<seastar::task*>::iterator task_list_iterator;
 #endif
 protected:
     // Task destruction is performed by run_and_dispose() via a concrete type,
     // so no need for a virtual destructor here. Derived classes that implement
     // run_and_dispose() should be declared final to avoid losing concrete type
     // information via inheritance.
-    ~task() = default;
+    ~task() {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+        if (task_list_iterator != internal::task_list().end()) {
+            internal::task_list().erase(task_list_iterator);
+            task_list_iterator = internal::task_list().end();
+        }
+#endif
+    }
+
 public:
-    explicit task(scheduling_group sg = current_scheduling_group()) noexcept : _sg(sg) {}
+    explicit task(scheduling_group sg = current_scheduling_group()) noexcept: _sg(sg) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    task_list_iterator = internal::task_list().insert(internal::task_list().end(), this);
+#endif
+    }
     virtual void run_and_dispose() noexcept = 0;
     /// Returns the next task which is waiting for this task to complete execution, or nullptr.
     virtual task* waiting_task() noexcept = 0;
