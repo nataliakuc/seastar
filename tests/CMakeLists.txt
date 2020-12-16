@@ -38,5 +38,7 @@ add_subdirectory (perf)
 # Unit tests.
 add_subdirectory (unit)
 
-# Deadlock tests.
-add_subdirectory (deadlock)
+if (NOT (SEASTAR_DEADLOCK_DETECTION STREQUAL ""))
+  # Deadlock tests.
+  add_subdirectory (deadlock)
+endif ()
