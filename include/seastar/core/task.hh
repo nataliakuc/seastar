@@ -61,7 +61,7 @@ protected:
 public:
     explicit task(scheduling_group sg = current_scheduling_group()) noexcept: _sg(sg) {
 #ifdef SEASTAR_DEADLOCK_DETECTION
-    task_list_iterator = internal::task_list().insert(internal::task_list().end(), this);
+        task_list_iterator = internal::task_list().insert(internal::task_list().end(), this);
 #endif
     }
     virtual void run_and_dispose() noexcept = 0;

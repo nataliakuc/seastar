@@ -1,5 +1,4 @@
-
-#include <seastar/core/future.hh>
+#include <seastar/core/task.hh>
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
 #include <list>

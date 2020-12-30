@@ -504,6 +504,7 @@ add_library (seastar STATIC
   include/seastar/core/stream.hh
   include/seastar/core/systemwide_memory_barrier.hh
   include/seastar/core/task.hh
+  include/seastar/core/internal/deadlock_utils.hh
   include/seastar/core/temporary_buffer.hh
   include/seastar/core/thread.hh
   include/seastar/core/thread_cputime_clock.hh
@@ -631,6 +632,7 @@ add_library (seastar STATIC
   src/core/vla.hh
   src/core/io_queue.cc
   src/core/task.cc
+  src/core/deadlock_utils.cc
   src/http/api_docs.cc
   src/http/common.cc
   src/http/file_handler.cc
