@@ -61,6 +61,9 @@ void promise_base::move_it(promise_base&& x) noexcept {
     _state = x._state;
     x._state = nullptr;
     _future = x._future;
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    this->set_held_locks(choose_newer_locks(this->get_held_locks(), x.get_held_locks()));
+#endif
     if (auto* fut = _future) {
         fut->detach_promise();
         fut->_promise = this;
@@ -108,11 +111,20 @@ void promise_base::set_to_current_exception() noexcept {
 template <promise_base::urgent Urgent>
 void promise_base::make_ready() noexcept {
     if (_task) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+        _task->set_held_locks(choose_newer_locks(this->get_held_locks(), _task->get_held_locks()));
+        this->set_held_locks(nullptr);
+#endif
         if (Urgent == urgent::yes) {
             ::seastar::schedule_urgent(std::exchange(_task, nullptr));
         } else {
             ::seastar::schedule(std::exchange(_task, nullptr));
         }
+    } else if (_future) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+        _future->set_held_locks(choose_newer_locks(this->get_held_locks(), _future->get_held_locks()));
+        this->set_held_locks(nullptr);
+#endif
     }
 }
 

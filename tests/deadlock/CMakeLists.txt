@@ -55,5 +55,11 @@ macro (seastar_add_test name)
 endmacro ()
 
 seastar_add_test (multiple_fibers_for_each
-  SOURCES multiple_fibers_for_each.cc)
+        SOURCES multiple_fibers_for_each.cc)
+
+seastar_add_test (mutex_test
+        SOURCES mutex_test.cc)
+
+seastar_add_test (mutex_test_deadlocked
+        SOURCES mutex_test_deadlocked.cc)
 

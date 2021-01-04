@@ -3210,6 +3210,10 @@ void schedule_urgent(task* t) noexcept {
     engine().add_urgent_task(t);
 }
 
+task* current_task() noexcept {
+    return engine().current_task();
+}
+
 }
 
 bool operator==(const ::sockaddr_in a, const ::sockaddr_in b) {

@@ -22,7 +22,10 @@
 #ifdef SEASTAR_DEADLOCK_DETECTION
 #include <list>
 #include <map>
+#include <unordered_set>
+#include <seastar/core/mutex.hh>
 #include <seastar/core/semaphore.hh>
+#include <utility>
 namespace seastar {
 
 class task;
@@ -30,5 +33,6 @@ namespace internal {
     std::map<seastar::task*, std::map<seastar::semaphore*, size_t>>& semaphore_map();
     seastar::task* previous_task(seastar::task *task);
 }
+
 }
 #endif

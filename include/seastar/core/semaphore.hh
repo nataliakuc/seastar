@@ -51,7 +51,7 @@ class semaphore_timed_out : public std::exception {
 public:
     /// Reports the exception reason.
     virtual const char* what() const noexcept {
-        return "Semaphore timedout";
+        return "Semaphore timed out";
     }
 };
 

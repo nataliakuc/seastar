@@ -490,6 +490,7 @@ add_library (seastar STATIC
   include/seastar/core/scollectd_api.hh
   include/seastar/core/seastar.hh
   include/seastar/core/semaphore.hh
+  include/seastar/core/mutex.hh
   include/seastar/core/sharded.hh
   include/seastar/core/shared_future.hh
   include/seastar/core/shared_mutex.hh
@@ -640,6 +641,7 @@ add_library (seastar STATIC
   src/http/json_path.cc
   src/http/matcher.cc
   src/http/mime_types.cc
+  src/core/mutex.cc
   src/http/reply.cc
   src/http/routes.cc
   src/http/transformers.cc
@@ -938,7 +940,7 @@ if ((CMAKE_BUILD_TYPE STREQUAL "Debug") OR (CMAKE_BUILD_TYPE STREQUAL "Sanitize"
       SEASTAR_SHUFFLE_TASK_QUEUE)
 endif ()
 
-if (NOT (SEASTAR_DEADLOCK_DETECTION STREQUAL ""))
+if (SEASTAR_DEADLOCK_DETECTION STREQUAL "True")
   target_compile_definitions (seastar
           PUBLIC
           SEASTAR_DEADLOCK_DETECTION)

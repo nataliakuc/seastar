@@ -41,6 +41,7 @@
 #endif
 
 namespace seastar {
+class held_locks;
 
 struct nested_exception : public std::exception {
     std::exception_ptr inner;
@@ -739,6 +740,9 @@ protected:
         task::make_backtrace();
     }
     virtual task* waiting_task() noexcept override;
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    virtual internal::promise_base *waiting_promise() const noexcept override;
+#endif
     Promise _pr;
 };
 
@@ -805,6 +809,9 @@ class future_base;
 
 class promise_base {
 protected:
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    shared_ptr<held_locks> _held;
+#endif
     enum class urgent { no, yes };
     future_base* _future = nullptr;
 
@@ -816,7 +823,20 @@ protected:
     task* _task = nullptr;
 
     promise_base(const promise_base&) = delete;
-    promise_base(future_state_base* state) noexcept : _state(state) {}
+    promise_base(future_state_base* state) noexcept : _state(state) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+        if (auto *task = ::seastar::current_task()) {
+            if (auto locks = task->get_held_locks()) {
+                this->set_held_locks(new_lock_level(locks));
+            } else {
+                this->set_held_locks(new_lock_level(nullptr));
+                deadlock_debug("No lock for current task");
+            }
+        } else {
+            deadlock_debug("No task in promise_base ctor");
+        }
+#endif
+    }
     promise_base(future_base* future, future_state_base* state) noexcept;
     void move_it(promise_base&& x) noexcept;
     promise_base(promise_base&& x) noexcept;
@@ -873,6 +893,8 @@ protected:
     template <typename SEASTAR_ELLIPSIS U> friend class seastar::future;
 
 public:
+    void set_held_locks(shared_ptr<held_locks> held);
+    shared_ptr<held_locks> get_held_locks();
     /// Set this promise to the current exception.
     ///
     /// This is equivalent to set_exception(std::current_exception()),
@@ -882,6 +904,21 @@ public:
     /// Returns the task which is waiting for this promise to resolve, or nullptr.
     task* waiting_task() const noexcept { return _task; }
 };
+
+inline
+void promise_base::set_held_locks(shared_ptr<held_locks> held) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    _held = std::move(held);
+#endif
+}
+inline
+shared_ptr<held_locks> promise_base::get_held_locks() {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    return _held;
+#else
+    return shared_ptr<held_locks>();
+#endif
+}
 
 /// \brief A promise with type but no local data.
 ///
@@ -944,6 +981,13 @@ private:
     friend class seastar::future;
 
     friend future_state;
+public:
+    void set_held_locks(const shared_ptr<held_locks> &held) {
+        promise_base::set_held_locks(held);
+    }
+    shared_ptr<held_locks> get_held_locks() {
+        return promise_base::get_held_locks();
+    }
 };
 }
 /// \endcond
@@ -1039,6 +1083,13 @@ public:
 
     template <typename SEASTAR_ELLIPSIS U>
     friend class future;
+public:
+    void set_held_locks(const shared_ptr<held_locks> &held) {
+        internal::promise_base_with_type<T SEASTAR_ELLIPSIS> ::set_held_locks(held);
+    }
+    shared_ptr<held_locks> get_held_locks() {
+        return internal::promise_base_with_type<T SEASTAR_ELLIPSIS> ::get_held_locks();
+    }
 };
 
 #if SEASTAR_API_LEVEL < 6
@@ -1136,14 +1187,45 @@ namespace internal {
 class future_base {
 protected:
     promise_base* _promise;
-    future_base() noexcept : _promise(nullptr) {}
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    shared_ptr<held_locks> _held;
+#endif
+    future_base() noexcept : _promise(nullptr) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+        if (auto *task = ::seastar::current_task()) {
+            if (auto locks = task->get_held_locks()) {
+                this->set_held_locks(new_lock_level(locks));
+            } else {
+                this->set_held_locks(new_lock_level(nullptr));
+                deadlock_debug("No lock for current task");
+            }
+        } else {
+            deadlock_debug("No task in promise_base ctor");
+        }
+#endif
+    }
     future_base(promise_base* promise, future_state_base* state) noexcept : _promise(promise) {
         _promise->_future = this;
         _promise->_state = state;
+#ifdef SEASTAR_DEADLOCK_DETECTION
+        if (auto *task = ::seastar::current_task()) {
+            if (auto locks = task->get_held_locks()) {
+                this->set_held_locks(new_lock_level(locks));
+            } else {
+                this->set_held_locks(new_lock_level(nullptr));
+                deadlock_debug("No lock for current task");
+            }
+        } else {
+            deadlock_debug("No task in promise_base ctor");
+        }
+#endif
     }
 
     void move_it(future_base&& x, future_state_base* state) noexcept {
         _promise = x._promise;
+#ifdef SEASTAR_DEADLOCK_DETECTION
+        this->set_held_locks(choose_newer_locks(this->get_held_locks(), x.get_held_locks()));
+#endif
         if (auto* p = _promise) {
             x.detach_promise();
             p->_future = this;
@@ -1172,6 +1254,9 @@ protected:
     }
 
     void schedule(task* tws, future_state_base* state) noexcept {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+        assert(!state->available());
+#endif
         promise_base* p = detach_promise();
         p->_state = state;
         p->_task = tws;
@@ -1184,7 +1269,24 @@ protected:
 #endif
 
     friend class promise_base;
+public:
+    void set_held_locks(shared_ptr<held_locks> held);
+    shared_ptr<held_locks> get_held_locks();
 };
+inline
+void future_base::set_held_locks(shared_ptr<held_locks> held) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    _held = std::move(held);
+#endif
+}
+inline
+shared_ptr<held_locks> future_base::get_held_locks() {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    return _held;
+#else
+    return shared_ptr<held_locks>();
+#endif
+}
 
 template <typename Func, typename... T>
 struct future_result  {
@@ -1291,6 +1393,13 @@ task* continuation_base_with_promise<Promise, T SEASTAR_ELLIPSIS>::waiting_task(
     return _pr.waiting_task();
 }
 
+#ifdef SEASTAR_DEADLOCK_DETECTION
+template <typename Promise, typename SEASTAR_ELLIPSIS T>
+internal::promise_base *continuation_base_with_promise<Promise, T SEASTAR_ELLIPSIS>::waiting_promise() const noexcept {
+    return (internal::promise_base *)&_pr;
+}
+#endif
+
 /// \brief A representation of a possibly not-yet-computed value.
 ///
 /// A \c future represents a value that has not yet been computed
@@ -1383,6 +1492,10 @@ private:
         // other build modes.
 #ifdef SEASTAR_DEBUG
         if (_state.available()) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+            tws->set_held_locks(this->get_held_locks());
+            this->set_held_locks(nullptr);
+#endif
             tws->set_state(std::move(_state));
             ::seastar::schedule(tws);
             return;
@@ -1598,7 +1711,11 @@ private:
 #if SEASTAR_API_LEVEL < 5
             return futurator::apply(std::forward<Func>(func), get_available_state_ref().take_value());
 #else
-            return futurator::invoke(std::forward<Func>(func), get_available_state_ref().take_value());
+            auto fut = futurator::invoke(std::forward<Func>(func), get_available_state_ref().take_value());
+#ifdef SEASTAR_DEADLOCK_DETECTION
+            fut.set_held_locks(choose_newer_locks(fut.get_held_locks(), this->get_held_locks()));
+#endif
+            return fut;
 #endif
         }
 #endif
@@ -1693,6 +1810,10 @@ private:
 
     void forward_to(internal::promise_base_with_type<T SEASTAR_ELLIPSIS>&& pr) noexcept {
         if (_state.available()) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+            pr.set_held_locks(choose_newer_locks(this->get_held_locks(), pr.get_held_locks()));
+            this->set_held_locks(nullptr);
+#endif
             pr.set_urgent_state(std::move(_state));
         } else {
             *detach_promise() = std::move(pr);
@@ -1878,6 +1999,10 @@ public:
 private:
     void set_callback(continuation_base<T SEASTAR_ELLIPSIS>* callback) noexcept {
         if (_state.available()) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+            callback->set_held_locks(choose_newer_locks(this->get_held_locks(), callback->get_held_locks()));
+            this->set_held_locks(nullptr);
+#endif
             callback->set_state(get_available_state_ref());
             ::seastar::schedule(callback);
         } else {
@@ -1911,6 +2036,13 @@ private:
     template <typename Future>
     friend struct internal::call_then_impl;
     /// \endcond
+public:
+    void set_held_locks(const shared_ptr<held_locks> &held) {
+        future_base::set_held_locks(held);
+    }
+    shared_ptr<held_locks> get_held_locks() {
+        return future_base::get_held_locks();
+    }
 };
 
 
@@ -2024,6 +2156,18 @@ private:
 inline internal::promise_base::promise_base(future_base* future, future_state_base* state) noexcept
     : _future(future), _state(state) {
     _future->_promise = this;
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    if (auto *task = ::seastar::current_task()) {
+        if (auto locks = task->get_held_locks()) {
+            this->set_held_locks(new_lock_level(locks));
+        } else {
+            this->set_held_locks(new_lock_level(nullptr));
+            deadlock_debug("No lock for current task");
+        }
+    } else {
+        deadlock_debug("No task in promise_base ctor");
+    }
+#endif
 }
 
 template <typename SEASTAR_ELLIPSIS T>
@@ -2031,7 +2175,15 @@ inline
 future<T SEASTAR_ELLIPSIS>
 promise<T SEASTAR_ELLIPSIS>::get_future() noexcept {
     assert(!this->_future && this->_state && !this->_task);
-    return future<T SEASTAR_ELLIPSIS>(this);
+    auto new_future = future<T SEASTAR_ELLIPSIS>(this);
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    if (new_future.available()) {
+        new_future.set_held_locks(this->get_held_locks());
+        this->set_held_locks(nullptr);
+    }
+#endif
+
+    return new_future;
 }
 
 template <typename SEASTAR_ELLIPSIS T>

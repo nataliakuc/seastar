@@ -24,18 +24,24 @@
 #include <memory>
 #include <seastar/core/scheduling.hh>
 #include <seastar/util/backtrace.hh>
+#include <seastar/core/shared_ptr.hh>
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
 #include <list>
 namespace seastar {
 class task;
 namespace internal {
-    std::list<seastar::task*>& task_list();
+std::list<seastar::task*>& task_list();
 }
 }
 #endif
 
 namespace seastar {
+class held_locks;
+namespace internal {
+class promise_base;
+}
+
 class task {
     scheduling_group _sg;
 #ifdef SEASTAR_TASK_BACKTRACE
@@ -43,6 +49,7 @@ class task {
 #endif
 #ifdef SEASTAR_DEADLOCK_DETECTION
     std::list<seastar::task*>::iterator task_list_iterator;
+    shared_ptr<held_locks> _held;
 #endif
 protected:
     // Task destruction is performed by run_and_dispose() via a concrete type,
@@ -64,6 +71,8 @@ public:
         task_list_iterator = internal::task_list().insert(internal::task_list().end(), this);
 #endif
     }
+    void set_held_locks(shared_ptr<held_locks> held);
+    shared_ptr<held_locks> get_held_locks();
     virtual void run_and_dispose() noexcept = 0;
     /// Returns the next task which is waiting for this task to complete execution, or nullptr.
     virtual task* waiting_task() noexcept = 0;
@@ -73,6 +82,17 @@ public:
     void make_backtrace() noexcept;
 #else
     void make_backtrace() noexcept {}
+#endif
+
+
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    virtual internal::promise_base *waiting_promise() const noexcept {
+        return nullptr;
+    }
+#else
+    internal::promise_base *waiting_promise() {
+        return nullptr;
+    }
 #endif
 };
 
@@ -87,5 +107,29 @@ shared_backtrace task::get_backtrace() const {
 
 void schedule(task* t) noexcept;
 void schedule_urgent(task* t) noexcept;
+task* current_task() noexcept;
+shared_ptr<held_locks> new_lock_level(const shared_ptr<held_locks>& current);
+shared_ptr<held_locks> choose_newer_locks(const shared_ptr<held_locks> &lhs, const shared_ptr<held_locks> &rhs);
+
+inline
+void task::set_held_locks(shared_ptr<held_locks> held) {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    _held = std::move(held);
+#endif
+}
+inline
+shared_ptr<held_locks> task::get_held_locks() {
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    return _held;
+#else
+    return shared_ptr<held_locks>();
+#endif
+}
+
+#ifdef SEASTAR_DEADLOCK_DETECTION
+void deadlock_debug(std::string_view);
+#else
+inline void deadlock_debug(std::string_view) {}
+#endif
 
 }
