@@ -36,10 +36,10 @@ using namespace std::chrono_literals;
 namespace seastar {
 class mutex;
 struct deadlockable_object;
-struct hash_deadlock_object;
+struct hash_deadlockable_object;
 class mutex_activity {
 private:
-    using vertex_set = std::unordered_set<deadlockable_object, hash_deadlock_object>;
+    using vertex_set = std::unordered_set<deadlockable_object, hash_deadlockable_object>;
     using duration = typename timer<timer<>::clock>::duration;
     using time_point = typename timer<timer<>::clock>::time_point;
     using clock = typename timer<timer<>::clock>::clock;

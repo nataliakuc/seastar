@@ -25,6 +25,7 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/util/backtrace.hh>
 #include <seastar/core/shared_ptr.hh>
+#include <iostream>
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
 #include <list>
@@ -127,9 +128,18 @@ shared_ptr<held_locks> task::get_held_locks() {
 }
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
-void deadlock_debug(std::string_view);
+inline void deadlock_debug() {
+    std::cerr << std::endl;
+}
+
+template<typename T, typename ...TT>
+inline void deadlock_debug(T a, TT ...args) {
+    std::cerr << a;
+    deadlock_debug(args...);
+}
 #else
-inline void deadlock_debug(std::string_view) {}
+template<typename ...TT>
+inline void deadlock_debug(TT...) {}
 #endif
 
 }

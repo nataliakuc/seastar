@@ -74,11 +74,29 @@ struct deadlockable_object {
         return lhs._ptr == rhs._ptr;
     }
 
-    friend struct hash_deadlock_object;
+    friend struct hash_deadlockable_object;
 };
 
+struct deadlock_found_backtrace : public std::exception {
+public:
+    const deadlockable_object _initiator;
 
-struct hash_deadlock_object {
+    deadlock_found_backtrace(deadlockable_object object) : _initiator(object) {}
+
+    const char* what() const noexcept override {
+        return "Found a deadlock.";
+    }
+};
+
+struct deadlock_found : public std::exception {
+    deadlock_found() = default;
+
+    const char* what() const noexcept override {
+        return "Found a deadlock.";
+    }
+};
+
+struct hash_deadlockable_object {
     size_t operator()(const deadlockable_object& rhs) const {
         return reinterpret_cast<size_t>(rhs._ptr);
     }
@@ -91,6 +109,7 @@ void mutex_activity::graph_search(mutex* mutex, vertex_set& route, vertex_set& v
 
     if (route.count(mutex)) {
         deadlock_debug("DEADLOCK");
+        throw deadlock_found_backtrace(mutex);
     }
 
     if (visited.count(mutex)) {
@@ -99,11 +118,18 @@ void mutex_activity::graph_search(mutex* mutex, vertex_set& route, vertex_set& v
 
     route.insert(mutex);
     visited.insert(mutex);
-
-    for (auto& promise : mutex->_wait_list) {
-        graph_search((internal::promise_base*) &promise, route, visited);
+    try {
+        for (auto& promise : mutex->_wait_list) {
+            graph_search((internal::promise_base*) &promise, route, visited);
+        }
     }
-
+    catch (const deadlock_found_backtrace& e) {
+        deadlock_debug("deadlocked mutex at ", mutex);
+        if (e._initiator == mutex) {
+            throw deadlock_found();
+        }
+        throw e;
+    }
     route.erase(mutex);
 }
 
@@ -114,6 +140,7 @@ void mutex_activity::graph_search(internal::promise_base* promise, vertex_set& r
 
     if (route.count(promise)) {
         deadlock_debug("DEADLOCK");
+        throw deadlock_found_backtrace(promise);
     }
 
     if (visited.count(promise)) {
@@ -123,12 +150,21 @@ void mutex_activity::graph_search(internal::promise_base* promise, vertex_set& r
     route.insert(promise);
     visited.insert(promise);
 
-    if (auto locks = promise->get_held_locks().get()) {
-        graph_search(locks, route, visited);
-    }
+    try {
+        if (auto locks = promise->get_held_locks().get()) {
+            graph_search(locks, route, visited);
+        }
 
-    if (auto task = promise->waiting_task()) {
-        graph_search(task, route, visited);
+        if (auto task = promise->waiting_task()) {
+            graph_search(task, route, visited);
+        }
+    }
+    catch (const deadlock_found_backtrace& e) {
+        deadlock_debug("deadlocked promise at ", promise);
+        if (e._initiator == promise) {
+            throw deadlock_found();
+        }
+        throw e;
     }
 
     route.erase(promise);
@@ -141,6 +177,7 @@ void mutex_activity::graph_search(task* task, vertex_set& route, vertex_set& vis
 
     if (route.count(task)) {
         deadlock_debug("DEADLOCK");
+        throw deadlock_found_backtrace(task);
     }
 
     if (visited.count(task)) {
@@ -150,16 +187,25 @@ void mutex_activity::graph_search(task* task, vertex_set& route, vertex_set& vis
     route.insert(task);
     visited.insert(task);
 
-    if (auto locks = task->get_held_locks().get()) {
-        graph_search(locks, route, visited);
-    }
+    try {
+        if (auto locks = task->get_held_locks().get()) {
+            graph_search(locks, route, visited);
+        }
 
-    if (auto promise = task->waiting_promise()) {
-        graph_search(promise, route, visited);
-    }
+        if (auto promise = task->waiting_promise()) {
+            graph_search(promise, route, visited);
+        }
 
-    if (auto next_task = task->waiting_task()) {
-        graph_search(next_task, route, visited);
+        if (auto next_task = task->waiting_task()) {
+            graph_search(next_task, route, visited);
+        }
+    }
+    catch (const deadlock_found_backtrace& e) {
+        deadlock_debug("deadlocked task at ", task);
+        if (e._initiator == task) {
+            throw deadlock_found();
+        }
+        throw e;
     }
 
     route.erase(task);
@@ -172,6 +218,7 @@ void mutex_activity::graph_search(held_locks* locks, vertex_set& route, vertex_s
 
     if (route.count(locks)) {
         deadlock_debug("DEADLOCK");
+        throw deadlock_found_backtrace(locks);
     }
 
     if (visited.count(locks)) {
@@ -181,12 +228,20 @@ void mutex_activity::graph_search(held_locks* locks, vertex_set& route, vertex_s
     route.insert(locks);
     visited.insert(locks);
 
-    for (auto* mutex : locks->_locks) {
-        graph_search(mutex, route, visited);
-    }
+    try {
+        for (auto* mutex : locks->_locks) {
+            graph_search(mutex, route, visited);
+        }
 
-    if (auto* inherited_locks = locks->_inherited_locks.get()) {
-        graph_search(inherited_locks, route, visited);
+        if (auto* inherited_locks = locks->_inherited_locks.get()) {
+            graph_search(inherited_locks, route, visited);
+        }
+    }
+    catch (const deadlock_found_backtrace& e) {
+        if (e._initiator == locks) {
+            throw deadlock_found();
+        }
+        throw e;
     }
 
     route.erase(locks);
@@ -196,16 +251,22 @@ void mutex_activity::find_inactive_mutexes() {
     time_point now = clock::now();
     vertex_set visited;
     vertex_set route;
-    for (auto[time, mutex] : _mutexes) {
-        if (now - time < MAX_INACTIVE_PERIOD) {
-            break;
-        }
+    try {
+        for (auto[time, mutex] : _mutexes) {
+            if (now - time < MAX_INACTIVE_PERIOD) {
+                break;
+            }
 
-        if (mutex->_open) {
-            continue;
-        }
+            if (mutex->_open) {
+                continue;
+            }
 
-        graph_search(mutex, route, visited);
+            graph_search(mutex, route, visited);
+        }
+    } catch (const deadlock_found &e) {
+        // skip
+    } catch (const deadlock_found_backtrace &e) {
+        assert(false);
     }
 }
 
@@ -217,6 +278,7 @@ shared_ptr<held_locks> new_lock_level(const shared_ptr<held_locks>& current) {
     }
     return new_level;
 }
+
 shared_ptr<held_locks> choose_newer_locks(const shared_ptr<held_locks>& lhs, const shared_ptr<held_locks>& rhs) {
     if (auto* l = lhs.get()) {
         if (auto* r = rhs.get()) {
@@ -235,7 +297,7 @@ shared_ptr<held_locks> choose_newer_locks(const shared_ptr<held_locks>& lhs, con
 
 size_t held_locks::counter = 1;
 
-mutex_activity &get_mutex_activity() {
+mutex_activity& get_mutex_activity() {
     static thread_local mutex_activity activity;
     return activity;
 }
