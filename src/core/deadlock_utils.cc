@@ -19,13 +19,17 @@
  * Copyright (C) 2020 ScyllaDB
  */
 
+#ifdef SEASTAR_DEADLOCK_DETECTION
 #include <seastar/core/internal/deadlock_utils.hh>
 #include <seastar/core/task.hh>
+#include <seastar/core/reactor.hh>
+#include <seastar/json/formatter.hh>
 #include <list>
+#include <map>
+#include <fstream>
+#include <string>
 
-#ifdef SEASTAR_DEADLOCK_DETECTION
 namespace seastar::internal {
-
 
 seastar::task* previous_task(seastar::task *task) {
     seastar::task* result = nullptr;
@@ -39,6 +43,48 @@ seastar::task* previous_task(seastar::task *task) {
     }
     return result;
 }
+
+static std::ostream& get_output_stream() {
+    static thread_local std::ofstream stream(fmt::format("graphdump.{}.json", this_shard_id()));
+    return stream;
+}
+
+template<typename T>
+static void write_data(T data) {
+    std::string serialized = json::formatter::to_json(data);
+    get_output_stream() << serialized << std::endl;
+}
+
+static uintptr_t traced_ptr_to_voidptr(traced_ptr ptr) {
+    void* ret = {};
+    if (auto ppval = std::get_if<task*>(&ptr)) {
+        ret = *ppval;
+    } else if (auto ppval = std::get_if<future_base*>(&ptr)) {
+        ret = *ppval;
+    } else if (auto ppval = std::get_if<promise_base*>(&ptr)) {
+        ret = *ppval;
+    }
+    return static_cast<size_t>(reinterpret_cast<uintptr_t>(ret));
+}
+
+void trace_runtime_edge(traced_ptr pre, traced_ptr post, bool speculative) {
+    std::map<std::string, size_t> edge {
+        {"pre", traced_ptr_to_voidptr(pre)},
+        {"post", traced_ptr_to_voidptr(post)},
+        {"speculative", static_cast<size_t>(speculative)}
+    };
+    std::map<std::string, decltype(edge)> data {{"edge", edge}};
+    write_data(data);
+}
+
+void trace_runtime_vertex_constructor(traced_ptr v) {
+    std::map<std::string, size_t> data {{"constructor", traced_ptr_to_voidptr(v)}};
+    write_data(data);
+}
+
+void trace_runtime_vertex_destructor(traced_ptr v) {
+    std::map<std::string, size_t> data {{"destructor", traced_ptr_to_voidptr(v)}};
+    write_data(data);
+}
 }
 #endif
-
