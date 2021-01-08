@@ -19,16 +19,27 @@
  * Copyright (C) 2020 ScyllaDB
  */
 
-#ifdef SEASTAR_DEADLOCK_DETECTION
 #include <list>
 #include <map>
-#include <seastar/core/semaphore.hh>
+#include <variant>
 namespace seastar {
 
+#ifdef SEASTAR_DEADLOCK_DETECTION
 class task;
 namespace internal {
-    std::map<seastar::task*, std::map<seastar::semaphore*, size_t>>& semaphore_map();
+
+class future_base;
+class promise_base;
     seastar::task* previous_task(seastar::task *task);
+
+using traced_ptr = std::variant<task *, future_base * , promise_base *>;
+
+void trace_runtime_edge(traced_ptr pre, traced_ptr post, bool speculative = false);
 }
+#else
+
+namespace internal {
+    constexpr void trace_runtime_edge(void *, void *, bool = false) {}
 }
 #endif
+}

@@ -21,16 +21,11 @@
 
 #include <seastar/core/internal/deadlock_utils.hh>
 #include <seastar/core/task.hh>
-#include <seastar/core/semaphore.hh>
+#include <list>
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
-#include <list>
 namespace seastar::internal {
 
-std::map<seastar::task*, std::map<seastar::semaphore*, size_t>>& semaphore_map() {
-    static thread_local std::map<seastar::task*, std::map<seastar::semaphore*, size_t>> map{};
-    return map;
-}
 
 seastar::task* previous_task(seastar::task *task) {
     seastar::task* result = nullptr;
