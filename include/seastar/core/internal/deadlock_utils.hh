@@ -36,14 +36,14 @@ using traced_ptr = std::variant<task*, future_base*, promise_base*>;
 
 void trace_runtime_edge(traced_ptr pre, traced_ptr post, bool speculative = false);
 void trace_runtime_vertex_constructor(traced_ptr v);
-void trace_runtime_vertex_deconstructor(traced_ptr v);
+void trace_runtime_vertex_destructor(traced_ptr v);
 }
 #else
 
 namespace internal {
 constexpr void trace_runtime_edge(void*, void*, bool = false) {}
 constexpr void trace_runtime_vertex_constructor(void*) {}
-constexpr void trace_runtime_vertex_deconstructor(void*) {}
+constexpr void trace_runtime_vertex_destructor(void*) {}
 }
 #endif
 }
