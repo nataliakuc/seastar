@@ -22,6 +22,7 @@
 #include <list>
 #include <map>
 #include <variant>
+#include <stdint.h>
 namespace seastar {
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
@@ -38,12 +39,32 @@ class future_base;
 class promise_base;
 seastar::task* previous_task(seastar::task* task);
 
-template<typename T1, typename T2>
-void trace_runtime_edge(T1* pre, T2* post, bool speculative);
 template<typename T>
-void trace_runtime_vertex_constructor(T* v);
+VertexType get_type(T* ptr);
+
+template<>
+VertexType get_type(task* ptr) {
+    return TASK;
+}
+template<>
+VertexType get_type(promise_base* ptr) {
+    return PROMISE;
+}
+template<>
+VertexType get_type(future_base* ptr) {
+    return FUTURE;
+}
+
+using EncodedVertex = std::map<const char*, size_t>;
+
 template<typename T>
-void trace_runtime_vertex_destructor(T* v);
+EncodedVertex serialize_vertex(T* ptr) {
+    return {{"value", reinterpret_cast<uintptr_t>(ptr)}, {"type", get_type(ptr)}};
+}
+
+void trace_runtime_edge(EncodedVertex&& pre, EncodedVertex&& post, bool speculative);
+void trace_runtime_vertex_constructor(EncodedVertex&& v);
+void trace_runtime_vertex_destructor(EncodedVertex&& v);
 }
 #else
 namespace internal {

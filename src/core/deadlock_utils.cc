@@ -56,47 +56,23 @@ static void write_data(T data) {
     get_output_stream() << serialized << std::endl;
 }
 
-template<typename T>
-VertexType get_type(T* ptr);
-
-template<>
-VertexType get_type(task* ptr) {
-    return TASK;
-}
-template<>
-VertexType get_type(promise_base* ptr) {
-    return PROMISE;
-}
-template<>
-VertexType get_type(future_base* ptr) {
-    return FUTURE;
-}
-
-template<typename T>
-std::map<const char*, size_t> serialize_vertex(T* ptr) {
-    return {{"value", reinterpret_cast<uintptr_t>(ptr)}, {"type", get_type(ptr)}};
-}
-
-template<typename T1, typename T2>
-void trace_runtime_edge(T1* pre, T2* post, bool speculative) {
-    std::map<const char*, size_t> edge {
-        {"pre", serialize_vertex(pre)},
-        {"post", serialize_vertex(post)},
+void trace_runtime_edge(EncodedVertex&& pre, EncodedVertex&& post, bool speculative) {
+    std::map<const char*, EncodedVertex> edge {
+        {"pre", pre},
+        {"post", post},
     };
     const char* name = speculative ? "edge" : "edge_speculative";
     std::map<const char*, decltype(edge)> data {{name, edge}};
     write_data(data);
 }
 
-template<typename T>
-void trace_runtime_vertex_constructor(T* v) {
-    std::map<const char*, size_t> data {{"constructor", serialize_vertex(v)}};
+void trace_runtime_vertex_constructor(EncodedVertex&& v) {
+    std::map<const char*, EncodedVertex> data {{"constructor", v}};
     write_data(data);
 }
 
-template<typename T>
-void trace_runtime_vertex_destructor(T* v) {
-    std::map<const char*, size_t> data {{"destructor", serialize_vertex(v)}};
+void trace_runtime_vertex_destructor(EncodedVertex&& v) {
+    std::map<const char*, EncodedVertex> data {{"destructor", v}};
     write_data(data);
 }
 }
