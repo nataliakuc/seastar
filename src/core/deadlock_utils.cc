@@ -32,25 +32,12 @@
 
 namespace seastar::internal {
 
-seastar::task* previous_task(seastar::task *task) {
-    seastar::task* result = nullptr;
-    for (const auto &t: task_list()) {
-        if (t->waiting_task() == task) {
-            if (result) {
-                // Note about strange behaviour.
-            }
-            result = t;
-        }
-    }
-    return result;
-}
-
 static std::ostream& get_output_stream() {
     static thread_local std::ofstream stream(fmt::format("graphdump.{}.json", this_shard_id()));
     return stream;
 }
 
-traced_ptr &current_traced_ptr() {
+static traced_ptr& current_traced_ptr() {
     static thread_local traced_ptr ptr;
     return ptr;
 }
@@ -61,8 +48,36 @@ static void write_data(T data) {
     get_output_stream() << serialized << std::endl;
 }
 
-std::map<const char*, size_t> serialize_vertex(traced_ptr v) {
-    return {{"value", reinterpret_cast<uintptr_t>(v._ptr)}, {"type", v._type}};
+static std::map<const char*, size_t> serialize_vertex(traced_ptr v) {
+    return {{"value", reinterpret_cast<uintptr_t>(v._ptr)},
+            {"type",  v._type}};
+}
+
+seastar::task* previous_task(seastar::task* task) {
+    seastar::task* result = nullptr;
+    for (const auto& t: task_list()) {
+        if (t->waiting_task() == task) {
+            if (result) {
+                // Note about strange behaviour.
+            }
+            result = t;
+        }
+    }
+    return result;
+}
+
+
+traced_ptr get_current_traced_ptr() {
+    return current_traced_ptr();
+}
+
+update_current_traced_vertex::update_current_traced_vertex(traced_ptr new_ptr) : _previous_ptr(current_traced_ptr()), _new_ptr(new_ptr) {
+    current_traced_ptr() = new_ptr;
+}
+
+update_current_traced_vertex::~update_current_traced_vertex() {
+    assert(current_traced_ptr() == _new_ptr);
+    current_traced_ptr() = _previous_ptr;
 }
 
 void trace_runtime_edge(traced_ptr pre, traced_ptr post, bool speculative) {

@@ -59,23 +59,16 @@ inline bool operator==(const traced_ptr &lhs, const traced_ptr &rhs) {
 
 seastar::task* previous_task(seastar::task* task);
 
-traced_ptr& current_traced_ptr();
+traced_ptr get_current_traced_ptr();
 
-inline traced_ptr get_current_traced_ptr() {
-    return current_traced_ptr();
-}
-
-struct update_current_traced_vertex {
+class update_current_traced_vertex {
     traced_ptr _previous_ptr;
     traced_ptr _new_ptr;
-    update_current_traced_vertex(traced_ptr new_ptr) : _previous_ptr(current_traced_ptr()), _new_ptr(new_ptr) {
-        current_traced_ptr() = new_ptr;
-    }
 
-    ~update_current_traced_vertex() {
-        assert(current_traced_ptr() == _new_ptr);
-        current_traced_ptr() = _previous_ptr;
-    }
+public:
+    update_current_traced_vertex(traced_ptr new_ptr);
+
+    ~update_current_traced_vertex();
 };
 
 void trace_runtime_edge(traced_ptr pre, traced_ptr post, bool speculative);
