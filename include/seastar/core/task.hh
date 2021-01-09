@@ -24,6 +24,7 @@
 #include <memory>
 #include <seastar/core/scheduling.hh>
 #include <seastar/util/backtrace.hh>
+#include <seastar/core/internal/deadlock_utils.hh>
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
 #include <list>
@@ -50,6 +51,7 @@ protected:
     // run_and_dispose() should be declared final to avoid losing concrete type
     // information via inheritance.
     ~task() {
+        internal::trace_runtime_vertex_destructor(this);
 #ifdef SEASTAR_DEADLOCK_DETECTION
         if (task_list_iterator != internal::task_list().end()) {
             internal::task_list().erase(task_list_iterator);
@@ -60,6 +62,7 @@ protected:
 
 public:
     explicit task(scheduling_group sg = current_scheduling_group()) noexcept: _sg(sg) {
+        internal::trace_runtime_vertex_constructor(this);
 #ifdef SEASTAR_DEADLOCK_DETECTION
         task_list_iterator = internal::task_list().insert(internal::task_list().end(), this);
 #endif

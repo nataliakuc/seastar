@@ -19,9 +19,13 @@
  * Copyright (C) 2020 ScyllaDB
  */
 
+#pragma once
+
 #include <list>
 #include <map>
 #include <variant>
+#include <assert.h>
+
 namespace seastar {
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
@@ -29,27 +33,71 @@ class task;
 namespace internal {
 
 enum VertexType : int {
-    TASK     = 0,
-    PROMISE  = 1,
-    FUTURE   = 2
+    NONE = 0,
+    TASK = 1,
+    PROMISE = 2,
+    FUTURE = 3
 };
 
 class future_base;
 class promise_base;
+struct traced_ptr {
+    VertexType _type;
+    void* _ptr;
+
+    traced_ptr() : _type(VertexType::NONE), _ptr(nullptr) {}
+    traced_ptr(task* ptr) : _type(VertexType::TASK), _ptr(ptr) {}
+    traced_ptr(future_base* ptr) : _type(VertexType::FUTURE), _ptr(ptr) {}
+    traced_ptr(promise_base* ptr) : _type(VertexType::PROMISE), _ptr(ptr) {}
+
+    friend bool operator==(const traced_ptr &lhs, const traced_ptr &rhs);
+};
+
+inline bool operator==(const traced_ptr &lhs, const traced_ptr &rhs) {
+    return lhs._type == rhs._type && lhs._ptr == rhs._ptr;
+}
+
 seastar::task* previous_task(seastar::task* task);
 
-template<typename T1, typename T2>
-void trace_runtime_edge(T1* pre, T2* post, bool speculative);
-template<typename T>
-void trace_runtime_vertex_constructor(T* v);
-template<typename T>
-void trace_runtime_vertex_destructor(T* v);
+traced_ptr& current_traced_ptr();
+
+inline traced_ptr get_current_traced_ptr() {
+    return current_traced_ptr();
+}
+
+struct update_current_traced_vertex {
+    traced_ptr _previous_ptr;
+    traced_ptr _new_ptr;
+    update_current_traced_vertex(traced_ptr new_ptr) : _previous_ptr(current_traced_ptr()), _new_ptr(new_ptr) {
+        current_traced_ptr() = new_ptr;
+    }
+
+    ~update_current_traced_vertex() {
+        assert(current_traced_ptr() == _new_ptr);
+        current_traced_ptr() = _previous_ptr;
+    }
+};
+
+void trace_runtime_edge(traced_ptr pre, traced_ptr post, bool speculative);
+inline void trace_runtime_edge(traced_ptr pre, traced_ptr post) {
+    trace_runtime_edge(pre, post, false);
+}
+void trace_runtime_vertex_constructor(traced_ptr v);
+void trace_runtime_vertex_destructor(traced_ptr v);
 }
 #else
 namespace internal {
 constexpr inline void trace_runtime_edge(void*, void*, bool = false) {}
 constexpr inline void trace_runtime_vertex_constructor(void*) {}
 constexpr inline void trace_runtime_vertex_destructor(void*) {}
+
+inline constexpr nullptr_t get_current_traced_ptr() {
+    return nullptr;
+}
+
+struct update_current_traced_vertex {
+    constexpr update_current_traced_vertex(void*) noexcept {}
+};
 }
 #endif
 }

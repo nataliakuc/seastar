@@ -50,36 +50,23 @@ static std::ostream& get_output_stream() {
     return stream;
 }
 
+traced_ptr &current_traced_ptr() {
+    static thread_local traced_ptr ptr;
+    return ptr;
+}
+
 template<typename T>
 static void write_data(T data) {
     std::string serialized = json::formatter::to_json(data);
     get_output_stream() << serialized << std::endl;
 }
 
-template<typename T>
-VertexType get_type(T* ptr);
-
-template<>
-VertexType get_type(task* ptr) {
-    return TASK;
-}
-template<>
-VertexType get_type(promise_base* ptr) {
-    return PROMISE;
-}
-template<>
-VertexType get_type(future_base* ptr) {
-    return FUTURE;
+std::map<const char*, size_t> serialize_vertex(traced_ptr v) {
+    return {{"value", reinterpret_cast<uintptr_t>(v._ptr)}, {"type", v._type}};
 }
 
-template<typename T>
-std::map<const char*, size_t> serialize_vertex(T* ptr) {
-    return {{"value", reinterpret_cast<uintptr_t>(ptr)}, {"type", get_type(ptr)}};
-}
-
-template<typename T1, typename T2>
-void trace_runtime_edge(T1* pre, T2* post, bool speculative) {
-    std::map<const char*, size_t> edge {
+void trace_runtime_edge(traced_ptr pre, traced_ptr post, bool speculative) {
+    std::map<const char*, std::map<const char*, size_t> > edge {
         {"pre", serialize_vertex(pre)},
         {"post", serialize_vertex(post)},
     };
@@ -88,15 +75,13 @@ void trace_runtime_edge(T1* pre, T2* post, bool speculative) {
     write_data(data);
 }
 
-template<typename T>
-void trace_runtime_vertex_constructor(T* v) {
-    std::map<const char*, size_t> data {{"constructor", serialize_vertex(v)}};
+void trace_runtime_vertex_constructor(traced_ptr v) {
+    std::map<const char*, std::map<const char*, size_t> > data {{"constructor", serialize_vertex(v)}};
     write_data(data);
 }
 
-template<typename T>
-void trace_runtime_vertex_destructor(T* v) {
-    std::map<const char*, size_t> data {{"destructor", serialize_vertex(v)}};
+void trace_runtime_vertex_destructor(traced_ptr v) {
+    std::map<const char*, std::map<const char*, size_t> > data {{"destructor", serialize_vertex(v)}};
     write_data(data);
 }
 }
