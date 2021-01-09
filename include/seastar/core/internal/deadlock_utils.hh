@@ -28,15 +28,22 @@ namespace seastar {
 class task;
 namespace internal {
 
+enum VertexType : int {
+    TASK     = 0,
+    PROMISE  = 1,
+    FUTURE   = 2
+};
+
 class future_base;
 class promise_base;
 seastar::task* previous_task(seastar::task* task);
 
-using traced_ptr = std::variant<task*, future_base*, promise_base*>;
-
-void trace_runtime_edge(traced_ptr pre, traced_ptr post, bool speculative);
-void trace_runtime_vertex_constructor(traced_ptr v);
-void trace_runtime_vertex_destructor(traced_ptr v);
+template<typename T1, typename T2>
+void trace_runtime_edge(T1* pre, T2* post, bool speculative);
+template<typename T>
+void trace_runtime_vertex_constructor(T* v);
+template<typename T>
+void trace_runtime_vertex_destructor(T* v);
 }
 #else
 namespace internal {

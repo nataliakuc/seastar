@@ -22,6 +22,7 @@
 #ifdef SEASTAR_DEADLOCK_DETECTION
 #include <seastar/core/internal/deadlock_utils.hh>
 #include <seastar/core/task.hh>
+#include <seastar/core/future.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/json/formatter.hh>
 #include <list>
@@ -55,35 +56,47 @@ static void write_data(T data) {
     get_output_stream() << serialized << std::endl;
 }
 
-static uintptr_t traced_ptr_to_voidptr(traced_ptr ptr) {
-    void* ret = {};
-    if (auto ppval = std::get_if<task*>(&ptr)) {
-        ret = *ppval;
-    } else if (auto ppval = std::get_if<future_base*>(&ptr)) {
-        ret = *ppval;
-    } else if (auto ppval = std::get_if<promise_base*>(&ptr)) {
-        ret = *ppval;
-    }
-    return static_cast<size_t>(reinterpret_cast<uintptr_t>(ret));
+template<typename T>
+VertexType get_type(T* ptr);
+
+template<>
+VertexType get_type(task* ptr) {
+    return TASK;
+}
+template<>
+VertexType get_type(promise_base* ptr) {
+    return PROMISE;
+}
+template<>
+VertexType get_type(future_base* ptr) {
+    return FUTURE;
 }
 
-void trace_runtime_edge(traced_ptr pre, traced_ptr post, bool speculative) {
-    std::map<std::string, size_t> edge {
-        {"pre", traced_ptr_to_voidptr(pre)},
-        {"post", traced_ptr_to_voidptr(post)},
-        {"speculative", static_cast<size_t>(speculative)}
+template<typename T>
+std::map<const char*, size_t> serialize_vertex(T* ptr) {
+    return {{"value", reinterpret_cast<uintptr_t>(ptr)}, {"type", get_type(ptr)}};
+}
+
+template<typename T1, typename T2>
+void trace_runtime_edge(T1* pre, T2* post, bool speculative) {
+    std::map<const char*, size_t> edge {
+        {"pre", serialize_vertex(pre)},
+        {"post", serialize_vertex(post)},
     };
-    std::map<std::string, decltype(edge)> data {{"edge", edge}};
+    const char* name = speculative ? "edge" : "edge_speculative";
+    std::map<const char*, decltype(edge)> data {{name, edge}};
     write_data(data);
 }
 
-void trace_runtime_vertex_constructor(traced_ptr v) {
-    std::map<std::string, size_t> data {{"constructor", traced_ptr_to_voidptr(v)}};
+template<typename T>
+void trace_runtime_vertex_constructor(T* v) {
+    std::map<const char*, size_t> data {{"constructor", serialize_vertex(v)}};
     write_data(data);
 }
 
-void trace_runtime_vertex_destructor(traced_ptr v) {
-    std::map<std::string, size_t> data {{"destructor", traced_ptr_to_voidptr(v)}};
+template<typename T>
+void trace_runtime_vertex_destructor(T* v) {
+    std::map<const char*, size_t> data {{"destructor", serialize_vertex(v)}};
     write_data(data);
 }
 }
