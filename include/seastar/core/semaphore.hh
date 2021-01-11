@@ -193,7 +193,7 @@ public:
         if (may_proceed(nr)) {
             _count -= nr;
             auto fut = make_ready_future<>();
-            //internal::trace_runtime_semaphore_wait(this, &fut);
+            internal::trace_runtime_semaphore_wait(this, &fut);
             return fut;
         }
         if (_ex) {

@@ -33,8 +33,6 @@ namespace seastar {
 class task;
 template<typename, typename>
 class basic_semaphore;
-template<typename>
-class promise;
 
 namespace internal {
 
@@ -47,22 +45,19 @@ enum VertexType : int {
 
 class future_base;
 class promise_base;
+
 struct traced_ptr {
     VertexType _type;
-    void* _ptr;
+    const void* _ptr;
 
     traced_ptr() : _type(VertexType::NONE), _ptr(nullptr) {}
-    traced_ptr(task* ptr) : _type(VertexType::TASK), _ptr(ptr) {}
-    traced_ptr(future_base* ptr) : _type(VertexType::FUTURE), _ptr(ptr) {}
-    traced_ptr(promise_base* ptr) : _type(VertexType::PROMISE), _ptr(ptr) {}
-    template<typename T>
-    traced_ptr(promise<T>* ptr) : _type(VertexType::PROMISE), _ptr(ptr) {}
-    //template<typename T>
-    //traced_ptr(future<T>* ptr) : _type(VertexType::FUTURE), _ptr(ptr) {}
+    traced_ptr(const task* ptr) : _type(VertexType::TASK), _ptr(ptr) {}
+    traced_ptr(const promise_base* ptr) : _type(VertexType::PROMISE), _ptr(ptr) {}
+    traced_ptr(const future_base* ptr) : _type(VertexType::FUTURE), _ptr(ptr) {}
 
     uintptr_t get_ptr() const;
 
-    friend bool operator==(const traced_ptr &lhs, const traced_ptr &rhs);
+    friend bool operator==(const traced_ptr& lhs, const traced_ptr& rhs);
 };
 
 seastar::task* previous_task(seastar::task* task);
@@ -123,12 +118,11 @@ namespace internal {
 constexpr inline void trace_runtime_edge(void*, void*, bool = false) {}
 constexpr inline void trace_runtime_vertex_constructor(void*) {}
 constexpr inline void trace_runtime_vertex_destructor(void*) {}
-constexpr inline void trace_runtime_semaphore_constructor(void const*, size_t) {}
+constexpr inline void trace_runtime_semaphore_constructor(void const*) {}
 constexpr inline void trace_runtime_semaphore_destructor(void const*) {}
-template<typename T1, typename T2>
-inline void trace_runtime_semaphore_signal_caller(basic_semaphore<T1, T2> const*, size_t, traced_ptr) {}
-template<typename T1, typename T2>
-inline void trace_runtime_semaphore_signal_schedule(basic_semaphore<T1, T2> const*, traced_ptr) {}
+constexpr inline void trace_runtime_semaphore_signal_caller(void*, size_t, void*) {}
+constexpr inline void trace_runtime_semaphore_signal_schedule(void*, void*) {}
+constexpr inline void trace_runtime_semaphore_wait(void*, void*) {}
 
 inline constexpr nullptr_t get_current_traced_ptr() {
     return nullptr;

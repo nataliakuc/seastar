@@ -162,6 +162,9 @@ struct future_state_base;
 template <typename T>
 struct futurize;
 
+template<typename, typename>
+class basic_semaphore;
+
 /// \brief Creates a \ref future in an available, value state.
 ///
 /// Creates a \ref future object that is already resolved.  This
@@ -953,8 +956,11 @@ private:
 
     friend future_state;
 
-    template <typename U>
+    template <typename>
     friend struct seastar::futurize;
+
+    template<typename, typename>
+    friend class seastar::basic_semaphore;
 };
 }
 /// \endcond
@@ -1050,6 +1056,9 @@ public:
 
     template <typename SEASTAR_ELLIPSIS U>
     friend class future;
+
+    template<typename, typename>
+    friend class basic_semaphore;
 };
 
 #if SEASTAR_API_LEVEL < 6
@@ -1919,6 +1928,8 @@ private:
     friend class promise;
     template <typename U>
     friend struct futurize;
+    template <typename, typename>
+    friend struct basic_semaphore;
     template <typename SEASTAR_ELLIPSIS U>
     friend class internal::promise_base_with_type;
     template <typename... U, typename... A>
