@@ -20,6 +20,7 @@
  */
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
+#include <sys/types.h>
 #include <seastar/core/internal/deadlock_utils.hh>
 #include <seastar/core/task.hh>
 #include <seastar/core/future.hh>
@@ -37,7 +38,7 @@ using dumped_value = map<const char*, size_t>;
 namespace seastar::internal {
 
 static std::ostream& get_output_stream() {
-    static thread_local std::ofstream stream(fmt::format("graphdump.{}.json", this_shard_id()));
+    static thread_local std::ofstream stream(fmt::format("graphdump.{}.json", gettid()));
     return stream;
 }
 
