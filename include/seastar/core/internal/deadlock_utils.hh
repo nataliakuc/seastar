@@ -25,11 +25,17 @@
 #include <map>
 #include <variant>
 #include <assert.h>
+#include <stdint.h>
 
 namespace seastar {
 
 #ifdef SEASTAR_DEADLOCK_DETECTION
 class task;
+template<typename, typename>
+class basic_semaphore;
+template<typename>
+class promise;
+
 namespace internal {
 
 enum VertexType : int {
@@ -49,13 +55,15 @@ struct traced_ptr {
     traced_ptr(task* ptr) : _type(VertexType::TASK), _ptr(ptr) {}
     traced_ptr(future_base* ptr) : _type(VertexType::FUTURE), _ptr(ptr) {}
     traced_ptr(promise_base* ptr) : _type(VertexType::PROMISE), _ptr(ptr) {}
+    template<typename T>
+    traced_ptr(promise<T>* ptr) : _type(VertexType::PROMISE), _ptr(ptr) {}
+    //template<typename T>
+    //traced_ptr(future<T>* ptr) : _type(VertexType::FUTURE), _ptr(ptr) {}
+
+    uintptr_t get_ptr() const;
 
     friend bool operator==(const traced_ptr &lhs, const traced_ptr &rhs);
 };
-
-inline bool operator==(const traced_ptr &lhs, const traced_ptr &rhs) {
-    return lhs._type == rhs._type && lhs._ptr == rhs._ptr;
-}
 
 seastar::task* previous_task(seastar::task* task);
 
@@ -77,12 +85,50 @@ inline void trace_runtime_edge(traced_ptr pre, traced_ptr post) {
 }
 void trace_runtime_vertex_constructor(traced_ptr v);
 void trace_runtime_vertex_destructor(traced_ptr v);
+
+void trace_runtime_semaphore_constructor(void const* sem, size_t count);
+template<typename T1, typename T2>
+void trace_runtime_semaphore_constructor(basic_semaphore<T1, T2> const* sem) {
+    trace_runtime_semaphore_constructor(reinterpret_cast<void const*>(sem), sem->available_units());
+}
+
+void trace_runtime_semaphore_destructor(void const* sem, size_t count);
+template<typename T1, typename T2>
+void trace_runtime_semaphore_destructor(basic_semaphore<T1, T2> const* sem) {
+    trace_runtime_semaphore_destructor(reinterpret_cast<void const*>(sem), sem->available_units());
+}
+
+void trace_runtime_semaphore_signal_caller(void const* sem, size_t count, traced_ptr caller);
+template<typename T1, typename T2>
+void trace_runtime_semaphore_signal_caller(basic_semaphore<T1, T2> const* sem, size_t count, traced_ptr caller) {
+    trace_runtime_semaphore_signal_caller(reinterpret_cast<void const*>(sem), count, caller);
+}
+
+void trace_runtime_semaphore_signal_schedule(void const* sem, traced_ptr unlocked);
+template<typename T1, typename T2>
+void trace_runtime_semaphore_signal_schedule(basic_semaphore<T1, T2> const* sem, traced_ptr unlocked) {
+    trace_runtime_semaphore_signal_schedule(reinterpret_cast<void const*>(sem), unlocked);
+}
+
+void trace_runtime_semaphore_wait(void const* sem, traced_ptr caller);
+
+template<typename T1, typename T2>
+void trace_runtime_semaphore_wait(basic_semaphore<T1, T2> const* sem, traced_ptr caller) {
+    trace_runtime_semaphore_wait(reinterpret_cast<void const*>(sem), caller);
+}
+
 }
 #else
 namespace internal {
 constexpr inline void trace_runtime_edge(void*, void*, bool = false) {}
 constexpr inline void trace_runtime_vertex_constructor(void*) {}
 constexpr inline void trace_runtime_vertex_destructor(void*) {}
+constexpr inline void trace_runtime_semaphore_constructor(void const*, size_t) {}
+constexpr inline void trace_runtime_semaphore_destructor(void const*) {}
+template<typename T1, typename T2>
+inline void trace_runtime_semaphore_signal_caller(basic_semaphore<T1, T2> const*, size_t, traced_ptr) {}
+template<typename T1, typename T2>
+inline void trace_runtime_semaphore_signal_schedule(basic_semaphore<T1, T2> const*, traced_ptr) {}
 
 inline constexpr nullptr_t get_current_traced_ptr() {
     return nullptr;
