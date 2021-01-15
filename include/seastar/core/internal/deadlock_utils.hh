@@ -115,16 +115,16 @@ void trace_runtime_semaphore_wait(basic_semaphore<T1, T2> const* sem, traced_ptr
 }
 #else
 namespace internal {
-constexpr inline void trace_runtime_edge(void*, void*, bool = false) {}
-constexpr inline void trace_runtime_vertex_constructor(void*) {}
-constexpr inline void trace_runtime_vertex_destructor(void*) {}
-constexpr inline void trace_runtime_semaphore_constructor(void const*) {}
-constexpr inline void trace_runtime_semaphore_destructor(void const*) {}
-constexpr inline void trace_runtime_semaphore_signal_caller(void*, size_t, void*) {}
-constexpr inline void trace_runtime_semaphore_signal_schedule(void*, void*) {}
-constexpr inline void trace_runtime_semaphore_wait(void*, void*) {}
+constexpr void trace_runtime_edge(void*, void*, bool = false) {}
+constexpr void trace_runtime_vertex_constructor(void*) {}
+constexpr void trace_runtime_vertex_destructor(void*) {}
+constexpr void trace_runtime_semaphore_constructor(void const*) {}
+constexpr void trace_runtime_semaphore_destructor(void const*) {}
+constexpr void trace_runtime_semaphore_signal_caller(void*, size_t, void*) {}
+constexpr void trace_runtime_semaphore_signal_schedule(void*, void*) {}
+constexpr void trace_runtime_semaphore_wait(void*, void*) {}
 
-inline constexpr nullptr_t get_current_traced_ptr() {
+constexpr nullptr_t get_current_traced_ptr() {
     return nullptr;
 }
 
