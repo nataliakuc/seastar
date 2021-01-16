@@ -935,6 +935,12 @@ if ((CMAKE_BUILD_TYPE STREQUAL "Debug") OR (CMAKE_BUILD_TYPE STREQUAL "Sanitize"
       SEASTAR_SHUFFLE_TASK_QUEUE)
 endif ()
 
+if (SEASTAR_DEADLOCK_DETECTION)
+  target_compile_definitions (seastar
+          PUBLIC
+          SEASTAR_DEADLOCK_DETECTION)
+endif ()
+
 set (Seastar_STACK_GUARD_MODES "Debug" "Sanitize" "Dev")
 if ((Seastar_STACK_GUARDS STREQUAL "ON") OR
     ((Seastar_STACK_GUARDS STREQUAL "DEFAULT") AND
