@@ -1166,7 +1166,7 @@ protected:
     future_base(promise_base* promise, future_state_base* state) noexcept : _promise(promise) {
         _promise->_future = this;
         _promise->_state = state;
-        internal::trace_runtime_vertex_destructor(this);
+        internal::trace_runtime_vertex_constructor(this);
     }
 
     void move_it(future_base&& x, future_state_base* state) noexcept {

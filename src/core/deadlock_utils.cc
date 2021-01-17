@@ -148,6 +148,7 @@ void trace_runtime_semaphore_wait(void const* sem, runtime_vertex caller) {
             {{"address", reinterpret_cast<uintptr_t>(sem)},
              {"caller", caller.get_ptr()}}
     }};
+    write_data(data);
 }
 
 }
