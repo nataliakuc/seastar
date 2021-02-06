@@ -1158,6 +1158,11 @@ protected:
     }
 
     void move_it(future_base&& x, future_state_base* state) noexcept {
+        deadlock_detection::trace_vertex_constructor(this);
+        deadlock_detection::trace_edge(&x, this);
+        deadlock_detection::trace_vertex_destructor(&x);
+        deadlock_detection::trace_vertex_constructor(&x);
+
         _promise = x._promise;
         if (auto* p = _promise) {
             x.detach_promise();
