@@ -35,6 +35,7 @@
 #include <seastar/util/concepts.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/backtrace.hh>
+#include <seastar/core/internal/deadlock_utils.hh>
 
 #if __cplusplus > 201703L
 #include <concepts>
@@ -944,6 +945,11 @@ private:
     friend class seastar::future;
 
     friend future_state;
+
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    template <typename TT>
+    friend deadlock_detection::info_tuple deadlock_detection::get_info(const internal::promise_base_with_type<TT>* ptr);
+#endif
 };
 }
 /// \endcond
@@ -1039,6 +1045,10 @@ public:
 
     template <typename SEASTAR_ELLIPSIS U>
     friend class future;
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    template <typename TT>
+    friend deadlock_detection::info_tuple deadlock_detection::get_info(const promise<TT>* ptr);
+#endif
 };
 
 #if SEASTAR_API_LEVEL < 6
@@ -1910,6 +1920,10 @@ private:
     friend void internal::set_callback(future<U...>&, V*) noexcept;
     template <typename Future>
     friend struct internal::call_then_impl;
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    template <typename TT>
+    friend deadlock_detection::info_tuple deadlock_detection::get_info(const future<TT>* ptr);
+#endif
     /// \endcond
 };
 
@@ -2190,7 +2204,35 @@ void set_callback(future<T...>& fut, U* callback) noexcept {
 
 }
 
+#ifdef SEASTAR_DEADLOCK_DETECTION
+namespace deadlock_detection {
 
+inline info_tuple get_info(const internal::promise_base* ptr) {
+    return {ptr, &typeid(internal::promise_base), &typeid(internal::promise_base)};
+}
+inline info_tuple get_info(const internal::future_base* ptr) {
+    return {ptr, &typeid(internal::future_base), &typeid(internal::future_base)};
+}
+template <typename T>
+info_tuple get_info(const internal::promise_base_with_type<T>* ptr) {
+    auto result = get_info(static_cast<const internal::promise_base*>(ptr));
+    std::get<2>(result) = &typeid(internal::promise_base_with_type<T>);
+    return result;
+}
+template <typename T>
+info_tuple get_info(const future<T>* ptr) {
+    auto result = get_info(static_cast<const internal::future_base*>(ptr));
+    std::get<2>(result) = &typeid(future<T>);
+    return result;
+}
+template <typename T>
+info_tuple get_info(const promise<T>* ptr) {
+    auto result = get_info(static_cast<const internal::promise_base_with_type<T>*>(ptr));
+    std::get<2>(result) = &typeid(promise<T>);
+    return result;
+}
+}
+#endif
 /// \endcond
 
 }
