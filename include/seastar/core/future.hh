@@ -1621,17 +1621,17 @@ private:
     then_impl(Func&& func) noexcept {
 #ifndef SEASTAR_DEBUG
         {
-          deadlock_detection::current_traced_vertex_updater update(this);
-          using futurator = futurize<internal::future_result_t<Func, T SEASTAR_ELLIPSIS>>;
-          if (failed()) {
-              return futurator::make_exception_future(static_cast<future_state_base&&>(get_available_state_ref()));
-          } else if (available()) {
+            deadlock_detection::current_traced_vertex_updater update(this);
+            using futurator = futurize<internal::future_result_t<Func, T SEASTAR_ELLIPSIS>>;
+            if (failed()) {
+                return futurator::make_exception_future(static_cast<future_state_base&&>(get_available_state_ref()));
+            } else if (available()) {
 #if SEASTAR_API_LEVEL < 5
-              return futurator::apply(std::forward<Func>(func), get_available_state_ref().take_value());
+                return futurator::apply(std::forward<Func>(func), get_available_state_ref().take_value());
 #else
-              return futurator::invoke(std::forward<Func>(func), get_available_state_ref().take_value());
+                return futurator::invoke(std::forward<Func>(func), get_available_state_ref().take_value());
 #endif
-          }
+            }
         }
 #endif
         return then_impl_nrvo<Func, Result>(std::forward<Func>(func));
