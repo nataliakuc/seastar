@@ -64,4 +64,13 @@ shared_backtrace task::get_backtrace() const {
 void schedule(task* t) noexcept;
 void schedule_urgent(task* t) noexcept;
 
+#ifdef SEASTAR_DEADLOCK_DETECTION
+namespace deadlock_detection {
+using info_tuple = std::tuple<const void*, const std::type_info*, const std::type_info*>;
+    inline info_tuple get_info(const task* ptr) {
+        return {ptr, &typeid(task), &typeid(task)};
+    }
+}
+#endif
+
 }
