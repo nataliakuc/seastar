@@ -35,6 +35,7 @@
 #include <seastar/util/concepts.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/backtrace.hh>
+#include <seastar/core/internal/deadlock_utils.hh>
 
 #if __cplusplus > 201703L
 #include <concepts>
@@ -816,7 +817,10 @@ protected:
     task* _task = nullptr;
 
     promise_base(const promise_base&) = delete;
-    promise_base(future_state_base* state) noexcept : _state(state) {}
+    promise_base(future_state_base* state) noexcept : _state(state) {
+        deadlock_detection::trace_vertex_constructor(this);
+        deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), this, true);
+    }
     promise_base(future_base* future, future_state_base* state) noexcept;
     void move_it(promise_base&& x) noexcept;
     promise_base(promise_base&& x) noexcept;
@@ -921,6 +925,7 @@ public:
 
     template <typename... A>
     void set_value(A&&... a) noexcept {
+        deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), this);
         if (auto *s = get_state()) {
             s->set(std::forward<A>(a)...);
             make_ready<urgent::no>();
@@ -944,6 +949,11 @@ private:
     friend class seastar::future;
 
     friend future_state;
+
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    template <typename TT>
+    friend deadlock_detection::info_tuple deadlock_detection::get_info(const internal::promise_base_with_type<TT>* ptr);
+#endif
 };
 }
 /// \endcond
@@ -1039,6 +1049,10 @@ public:
 
     template <typename SEASTAR_ELLIPSIS U>
     friend class future;
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    template <typename TT>
+    friend deadlock_detection::info_tuple deadlock_detection::get_info(const promise<TT>* ptr);
+#endif
 };
 
 #if SEASTAR_API_LEVEL < 6
@@ -1136,13 +1150,20 @@ namespace internal {
 class future_base {
 protected:
     promise_base* _promise;
-    future_base() noexcept : _promise(nullptr) {}
+    future_base() noexcept : _promise(nullptr) {
+        deadlock_detection::trace_vertex_constructor(this);
+        deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), this, true);
+    }
     future_base(promise_base* promise, future_state_base* state) noexcept : _promise(promise) {
         _promise->_future = this;
         _promise->_state = state;
+        deadlock_detection::trace_vertex_constructor(this);
+        deadlock_detection::trace_edge(promise, this);
     }
 
     void move_it(future_base&& x, future_state_base* state) noexcept {
+        deadlock_detection::trace_move_vertex(&x, this);
+
         _promise = x._promise;
         if (auto* p = _promise) {
             x.detach_promise();
@@ -1156,6 +1177,7 @@ protected:
     }
 
     void clear() noexcept {
+        deadlock_detection::trace_vertex_destructor(this);
         if (_promise) {
             detach_promise();
         }
@@ -1175,6 +1197,7 @@ protected:
         promise_base* p = detach_promise();
         p->_state = state;
         p->_task = tws;
+        deadlock_detection::trace_edge(this, tws);
     }
 
     void do_wait() noexcept;
@@ -1383,6 +1406,7 @@ private:
         // other build modes.
 #ifdef SEASTAR_DEBUG
         if (_state.available()) {
+            deadlock_detection::trace_edge(this, tws);
             tws->set_state(std::move(_state));
             ::seastar::schedule(tws);
             return;
@@ -1517,7 +1541,9 @@ public:
         // now it returns a when_all_succeed_tuple, which we intercept in call_then_impl,
         // and treat it as a variadic future.
 #ifndef SEASTAR_TYPE_ERASE_MORE
-        return call_then_impl::run(*this, std::move(func));
+        auto fut = call_then_impl::run(*this, std::move(func));
+        deadlock_detection::trace_edge(this, &fut);
+        return fut;
 #else
         using func_type = typename call_then_impl::template func_type<Func>;
         noncopyable_function<func_type> ncf;
@@ -1527,7 +1553,9 @@ public:
                 return futurize_invoke(func, std::forward<decltype(args)>(args)...);
             });
         }
-        return call_then_impl::run(*this, std::move(ncf));
+        auto fut = call_then_impl::run(*this, std::move(ncf));
+        deadlock_detection::trace_edge(this, &fut);
+        return fut;
 #endif
     }
 
@@ -1570,6 +1598,7 @@ private:
         using pr_type = decltype(fut.get_promise());
         schedule(fut.get_promise(), std::move(func), [](pr_type&& pr, Func& func, future_state&& state) {
             if (state.failed()) {
+                deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), &pr);
                 pr.set_exception(static_cast<future_state_base&&>(std::move(state)));
             } else {
                 futurator::satisfy_with_result_of(std::move(pr), [&func, &state] {
@@ -1591,15 +1620,18 @@ private:
     Result
     then_impl(Func&& func) noexcept {
 #ifndef SEASTAR_DEBUG
-        using futurator = futurize<internal::future_result_t<Func, T SEASTAR_ELLIPSIS>>;
-        if (failed()) {
-            return futurator::make_exception_future(static_cast<future_state_base&&>(get_available_state_ref()));
-        } else if (available()) {
+        {
+          deadlock_detection::current_traced_vertex_updater update(this);
+          using futurator = futurize<internal::future_result_t<Func, T SEASTAR_ELLIPSIS>>;
+          if (failed()) {
+              return futurator::make_exception_future(static_cast<future_state_base&&>(get_available_state_ref()));
+          } else if (available()) {
 #if SEASTAR_API_LEVEL < 5
-            return futurator::apply(std::forward<Func>(func), get_available_state_ref().take_value());
+              return futurator::apply(std::forward<Func>(func), get_available_state_ref().take_value());
 #else
-            return futurator::invoke(std::forward<Func>(func), get_available_state_ref().take_value());
+              return futurator::invoke(std::forward<Func>(func), get_available_state_ref().take_value());
 #endif
+          }
         }
 #endif
         return then_impl_nrvo<Func, Result>(std::forward<Func>(func));
@@ -1625,14 +1657,18 @@ public:
     SEASTAR_CONCEPT( requires std::invocable<Func, future> )
     futurize_t<FuncResult>
     then_wrapped(Func&& func) & noexcept {
-        return then_wrapped_maybe_erase<false, FuncResult>(std::forward<Func>(func));
+        auto fut = then_wrapped_maybe_erase<false, FuncResult>(std::forward<Func>(func));
+        deadlock_detection::trace_edge(this, &fut);
+        return fut;
     }
 
     template <typename Func, typename FuncResult = std::invoke_result_t<Func, future&&>>
     SEASTAR_CONCEPT( requires std::invocable<Func, future&&> )
     futurize_t<FuncResult>
     then_wrapped(Func&& func) && noexcept {
-        return then_wrapped_maybe_erase<true, FuncResult>(std::forward<Func>(func));
+        auto fut = then_wrapped_maybe_erase<true, FuncResult>(std::forward<Func>(func));
+        deadlock_detection::trace_edge(this, &fut);
+        return fut;
     }
 
 private:
@@ -1678,6 +1714,7 @@ private:
 #ifndef SEASTAR_DEBUG
         using futurator = futurize<FuncResult>;
         if (available()) {
+            deadlock_detection::current_traced_vertex_updater update(this);
             if constexpr (AsSelf) {
                 if (_promise) {
                     detach_promise();
@@ -1693,6 +1730,7 @@ private:
 
     void forward_to(internal::promise_base_with_type<T SEASTAR_ELLIPSIS>&& pr) noexcept {
         if (_state.available()) {
+            deadlock_detection::trace_edge(this, &pr);
             pr.set_urgent_state(std::move(_state));
         } else {
             *detach_promise() = std::move(pr);
@@ -1712,6 +1750,7 @@ public:
     /// future.
     void forward_to(promise<T SEASTAR_ELLIPSIS>&& pr) noexcept {
         if (_state.available()) {
+            deadlock_detection::trace_edge(this, &pr);
             pr.set_urgent_state(std::move(_state));
         } else if (&pr._local_state != pr._state) {
             // The only case when _state points to _local_state is
@@ -1878,6 +1917,7 @@ public:
 private:
     void set_callback(continuation_base<T SEASTAR_ELLIPSIS>* callback) noexcept {
         if (_state.available()) {
+            deadlock_detection::trace_edge(this, callback);
             callback->set_state(get_available_state_ref());
             ::seastar::schedule(callback);
         } else {
@@ -1910,6 +1950,10 @@ private:
     friend void internal::set_callback(future<U...>&, V*) noexcept;
     template <typename Future>
     friend struct internal::call_then_impl;
+#ifdef SEASTAR_DEADLOCK_DETECTION
+    template <typename TT>
+    friend deadlock_detection::info_tuple deadlock_detection::get_info(const future<TT>* ptr);
+#endif
     /// \endcond
 };
 
@@ -2024,6 +2068,8 @@ private:
 inline internal::promise_base::promise_base(future_base* future, future_state_base* state) noexcept
     : _future(future), _state(state) {
     _future->_promise = this;
+    deadlock_detection::trace_vertex_constructor(this);
+    deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), this, true);
 }
 
 template <typename SEASTAR_ELLIPSIS T>
@@ -2113,6 +2159,7 @@ template<typename Func>
 SEASTAR_CONCEPT( requires std::invocable<Func> )
 void futurize<T>::satisfy_with_result_of(promise_base_with_type&& pr, Func&& func) {
     using ret_t = decltype(func());
+    deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), &pr);
     if constexpr (std::is_void_v<ret_t>) {
         func();
         pr.set_value();
@@ -2190,7 +2237,35 @@ void set_callback(future<T...>& fut, U* callback) noexcept {
 
 }
 
+#ifdef SEASTAR_DEADLOCK_DETECTION
+namespace deadlock_detection {
 
+inline info_tuple get_info(const internal::promise_base* ptr) {
+    return {ptr, &typeid(internal::promise_base), &typeid(*ptr)};
+}
+inline info_tuple get_info(const internal::future_base* ptr) {
+    return {ptr, &typeid(internal::future_base), &typeid(*ptr)};
+}
+template <typename T>
+info_tuple get_info(const internal::promise_base_with_type<T>* ptr) {
+    auto result = get_info(static_cast<const internal::promise_base*>(ptr));
+    std::get<2>(result) = &typeid(internal::promise_base_with_type<T>);
+    return result;
+}
+template <typename T>
+info_tuple get_info(const future<T>* ptr) {
+    auto result = get_info(static_cast<const internal::future_base*>(ptr));
+    std::get<2>(result) = &typeid(future<T>);
+    return result;
+}
+template <typename T>
+info_tuple get_info(const promise<T>* ptr) {
+    auto result = get_info(static_cast<const internal::promise_base_with_type<T>*>(ptr));
+    std::get<2>(result) = &typeid(promise<T>);
+    return result;
+}
+}
+#endif
 /// \endcond
 
 }
