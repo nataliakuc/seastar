@@ -81,6 +81,11 @@ promise_base::promise_base(promise_base&& x) noexcept {
 }
 
 void promise_base::clear() noexcept {
+    // For the purpose of deadlock detection, clearing effectively detaches
+    // logical connection between promise_base and the next promise_base that
+    // will replace it.
+    deadlock_detection::trace_vertex_destructor(this);
+
     if (__builtin_expect(bool(_task), false)) {
         assert(_state && !_state->available());
         set_to_broken_promise(*_state);
