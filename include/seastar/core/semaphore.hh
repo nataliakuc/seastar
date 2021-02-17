@@ -27,6 +27,7 @@
 #include <exception>
 #include <seastar/core/timer.hh>
 #include <seastar/core/expiring_fifo.hh>
+#include <seastar/core/internal/deadlock_utils.hh>
 
 namespace seastar {
 
@@ -156,8 +157,12 @@ public:
     /// an unlocked mutex.
     ///
     /// \param count number of initial units present in the counter.
-    basic_semaphore(size_t count) : _count(count) {}
-    basic_semaphore(size_t count, exception_factory&& factory) : exception_factory(factory), _count(count), _wait_list(expiry_handler(std::move(factory))) {}
+    basic_semaphore(size_t count) : _count(count) {
+        deadlock_detection::trace_semaphore_constructor(this);
+    }
+    basic_semaphore(size_t count, exception_factory&& factory) : exception_factory(factory), _count(count), _wait_list(expiry_handler(std::move(factory))) {
+        deadlock_detection::trace_semaphore_constructor(this);
+    }
     /// Waits until at least a specific number of units are available in the
     /// counter, and reduces the counter by that amount of units.
     ///
@@ -187,7 +192,9 @@ public:
     future<> wait(time_point timeout, size_t nr = 1) noexcept {
         if (may_proceed(nr)) {
             _count -= nr;
-            return make_ready_future<>();
+            auto fut = make_ready_future<>();
+            deadlock_detection::trace_semaphore_wait(this, nr, &fut);
+            return fut;
         }
         if (_ex) {
             return make_exception_future(_ex);
@@ -196,6 +203,7 @@ public:
         auto fut = e.pr.get_future();
         try {
             _wait_list.push_back(std::move(e), timeout);
+            deadlock_detection::trace_semaphore_wait(this, nr, &fut);
         } catch (...) {
             e.pr.set_exception(std::current_exception());
         }
@@ -228,6 +236,7 @@ public:
     ///
     /// \param nr Number of units to deposit (default 1).
     void signal(size_t nr = 1) {
+        deadlock_detection::trace_semaphore_signal_caller(this, nr, deadlock_detection::get_current_traced_ptr());
         if (_ex) {
             return;
         }
@@ -235,6 +244,7 @@ public:
         while (!_wait_list.empty() && has_available_units(_wait_list.front().nr)) {
             auto& x = _wait_list.front();
             _count -= x.nr;
+            deadlock_detection::trace_semaphore_signal_schedule(this, &x.pr);
             x.pr.set_value();
             _wait_list.pop_front();
         }
