@@ -1404,6 +1404,8 @@ private:
         // noexcept, it will call std::terminate if new throws.
         memory::disable_failure_guard dfg;
         auto tws = new continuation<Pr, Func, Wrapper, T SEASTAR_ELLIPSIS>(std::move(pr), std::move(func), std::move(wrapper));
+
+        deadlock_detection::trace_vertex_extra_information(tws, "func_type", typeid(Func).name());
         // In a debug build we schedule ready futures, but not in
         // other build modes.
 #ifdef SEASTAR_DEBUG
@@ -1626,8 +1628,10 @@ private:
             deadlock_detection::current_traced_vertex_updater update(this);
             using futurator = futurize<internal::future_result_t<Func, T SEASTAR_ELLIPSIS>>;
             if (failed()) {
+                deadlock_detection::trace_vertex_extra_information(this, "func_type", typeid(Func).name());
                 return futurator::make_exception_future(static_cast<future_state_base&&>(get_available_state_ref()));
             } else if (available()) {
+                deadlock_detection::trace_vertex_extra_information(this, "func_type", typeid(Func).name());
 #if SEASTAR_API_LEVEL < 5
                 return futurator::apply(std::forward<Func>(func), get_available_state_ref().take_value());
 #else
@@ -1717,6 +1721,7 @@ private:
         using futurator = futurize<FuncResult>;
         if (available()) {
             deadlock_detection::current_traced_vertex_updater update(this);
+            deadlock_detection::trace_vertex_extra_information(this, "func_type", typeid(Func).name());
             if constexpr (AsSelf) {
                 if (_promise) {
                     detach_promise();

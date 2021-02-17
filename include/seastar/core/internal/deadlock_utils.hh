@@ -112,6 +112,9 @@ void trace_vertex_constructor(runtime_vertex v);
 /// Traced destruction of runtime vertex (or deinitialization).
 void trace_vertex_destructor(runtime_vertex v);
 
+/// Traces additional information about vertex.
+void trace_vertex_extra_information(runtime_vertex v, const char* key, std::string value);
+
 /// Traces construction of semaphore.
 void trace_semaphore_constructor(const void* sem, size_t count);
 template <typename T1, typename T2>

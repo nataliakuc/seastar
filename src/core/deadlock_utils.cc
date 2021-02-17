@@ -139,6 +139,11 @@ void trace_vertex_destructor(runtime_vertex v) {
     write_data(data);
 }
 
+void trace_vertex_extra_information(runtime_vertex v, const char* key, std::string value) {
+    std::map<const char*, dumped_value> data{{"vertex_info", {key, std::move(value)}}};
+    write_data(data);
+}
+
 void trace_semaphore_constructor(const void* sem, size_t count) {
     auto serialized_sem = serialize_semaphore(sem, count);
     std::map<const char*, dumped_value> data{{"semaphore_constructor", serialized_sem}};
