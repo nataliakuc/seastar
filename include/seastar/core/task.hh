@@ -25,6 +25,7 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/util/backtrace.hh>
 #include <seastar/core/internal/deadlock_utils.hh>
+#include <iostream>
 
 namespace seastar {
 
@@ -74,7 +75,7 @@ void schedule_urgent(task* t) noexcept;
 namespace deadlock_detection {
 using info_tuple = std::tuple<const void*, const std::type_info*, const std::type_info*>;
     inline info_tuple get_info(const task* ptr) {
-        return {ptr, &typeid(*ptr), &typeid(task)};
+        return {ptr, &typeid(task), &typeid(*ptr)};
     }
 }
 #endif

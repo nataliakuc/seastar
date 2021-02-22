@@ -96,7 +96,7 @@ static void write_data(T data) {
 
 /// Converts runtime vertex to serializable data.
 static dumped_value serialize_vertex(runtime_vertex v) {
-    return {{"value", v._ptr},
+    return {{"value", v.get_ptr()},
             {"base_type", v._base_type->name()},
             {"type", v._type->name()}};
 }
@@ -149,6 +149,22 @@ void trace_semaphore_destructor(const void* sem, size_t count) {
     auto serialized_sem = serialize_semaphore(sem, count);
     std::map<const char*, dumped_value> data{{"semaphore_destructor", serialized_sem}};
     write_data(data);
+}
+
+void attach_func_type(runtime_vertex ptr, const std::type_info& func_type, const char* file, uint32_t line) {
+    std::map<const char*, dumped_value> data{{"attach_func_type", {
+        {"value", ptr.get_ptr()}, 
+        {"type", func_type.name()},
+        {"file", std::string(file)},
+        {"line", line}}}};
+    write_data(data);
+}
+
+void move_vertex(runtime_vertex from, runtime_vertex to) {
+    trace_vertex_constructor(to);
+    trace_edge(from, to);
+    trace_vertex_destructor(from);
+    trace_vertex_constructor(from);
 }
 
 

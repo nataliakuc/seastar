@@ -1161,10 +1161,7 @@ protected:
     }
 
     void move_it(future_base&& x, future_state_base* state) noexcept {
-        deadlock_detection::trace_vertex_constructor(this);
-        deadlock_detection::trace_edge(&x, this);
-        deadlock_detection::trace_vertex_destructor(&x);
-        deadlock_detection::trace_vertex_constructor(&x);
+        deadlock_detection::move_vertex(&x, this);
 
         _promise = x._promise;
         if (auto* p = _promise) {
@@ -1661,6 +1658,7 @@ public:
     then_wrapped(Func&& func) & noexcept {
         auto fut = then_wrapped_maybe_erase<false, FuncResult>(std::forward<Func>(func));
         deadlock_detection::trace_edge(this, &fut);
+        //deadlock_detection::attach_func_type<Func>(&fut);
         return fut;
     }
 
@@ -1670,6 +1668,7 @@ public:
     then_wrapped(Func&& func) && noexcept {
         auto fut = then_wrapped_maybe_erase<true, FuncResult>(std::forward<Func>(func));
         deadlock_detection::trace_edge(this, &fut);
+        //deadlock_detection::attach_func_type<Func>(&fut);
         return fut;
     }
 
@@ -2029,6 +2028,7 @@ struct futurize : public internal::futurize_base<T> {
     template<typename Func, typename... FuncArgs>
     [[deprecated("Use invoke for varargs")]]
     static inline type apply(Func&& func, FuncArgs&&... args) noexcept {
+        deadlock_detection::attach_func_type<Func>(deadlock_detection::get_current_traced_ptr());
         return invoke(std::forward<Func>(func), std::forward<FuncArgs>(args)...);
     }
 
@@ -2141,6 +2141,7 @@ future<T...> make_exception_future_with_backtrace(Exception&& ex) noexcept {
 template<typename T>
 template<typename Func, typename... FuncArgs>
 typename futurize<T>::type futurize<T>::apply(Func&& func, std::tuple<FuncArgs...>&& args) noexcept {
+    deadlock_detection::attach_func_type<Func>(deadlock_detection::get_current_traced_ptr());
     try {
         using ret_t = decltype(std::apply(std::forward<Func>(func), std::move(args)));
         if constexpr (std::is_void_v<ret_t>) {
@@ -2161,14 +2162,15 @@ template<typename Func>
 SEASTAR_CONCEPT( requires std::invocable<Func> )
 void futurize<T>::satisfy_with_result_of(promise_base_with_type&& pr, Func&& func) {
     using ret_t = decltype(func());
+    deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), &pr);
+    //deadlock_detection::attach_func_type<Func>(deadlock_detection::get_current_traced_ptr());
+    deadlock_detection::attach_func_type<Func>(&pr);
     if constexpr (std::is_void_v<ret_t>) {
-        deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), &pr);
         func();
         pr.set_value();
     } else if constexpr (is_future<ret_t>::value) {
         func().forward_to(std::move(pr));
     } else {
-        deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), &pr);
         pr.set_value(func());
     }
 }
@@ -2176,6 +2178,7 @@ void futurize<T>::satisfy_with_result_of(promise_base_with_type&& pr, Func&& fun
 template<typename T>
 template<typename Func, typename... FuncArgs>
 typename futurize<T>::type futurize<T>::invoke(Func&& func, FuncArgs&&... args) noexcept {
+    deadlock_detection::attach_func_type<Func>(deadlock_detection::get_current_traced_ptr());
     try {
         using ret_t = decltype(func(std::forward<FuncArgs>(args)...));
         if constexpr (std::is_void_v<ret_t>) {
@@ -2244,10 +2247,10 @@ void set_callback(future<T...>& fut, U* callback) noexcept {
 namespace deadlock_detection {
 
 inline info_tuple get_info(const internal::promise_base* ptr) {
-    return {ptr, &typeid(internal::promise_base), &typeid(internal::promise_base)};
+    return {ptr, &typeid(internal::promise_base), &typeid(*ptr)};
 }
 inline info_tuple get_info(const internal::future_base* ptr) {
-    return {ptr, &typeid(internal::future_base), &typeid(internal::future_base)};
+    return {ptr, &typeid(internal::future_base), &typeid(*ptr)};
 }
 template <typename T>
 info_tuple get_info(const internal::promise_base_with_type<T>* ptr) {
