@@ -102,10 +102,11 @@ public:
 
 /// Traces causal edge between two vertices.
 /// e.g from task to promise that it completes.
-void trace_edge(runtime_vertex pre, runtime_vertex post, bool speculative);
-inline void trace_edge(runtime_vertex pre, runtime_vertex post) {
+void trace_edge(runtime_vertex pre, runtime_vertex post, bool speculative = false);
+/*inline void trace_edge(runtime_vertex pre, runtime_vertex post) {
     trace_edge(pre, post, false);
 }
+*/
 
 /// Traces creation of runtime vertex (or reinitialization).
 void trace_vertex_constructor(runtime_vertex v);
@@ -146,6 +147,14 @@ template <typename T1, typename T2>
 void inline trace_semaphore_wait(const basic_semaphore<T1, T2>* sem, size_t count, runtime_vertex caller) {
     trace_semaphore_wait(static_cast<const void*>(sem), count, caller);
 }
+
+void attach_func_type(runtime_vertex pt, const std::type_info& func_typ, const char* file = __builtin_FILE(), uint32_t line = __builtin_LINE());
+template<typename FuncType>
+void inline attach_func_type(runtime_vertex ptr, const char* file = __builtin_FILE(), uint32_t line = __builtin_LINE()) {
+    attach_func_type(ptr, typeid(FuncType), file, line);
+}
+
+void move_vertex(runtime_vertex from, runtime_vertex to);
 
 }
 
