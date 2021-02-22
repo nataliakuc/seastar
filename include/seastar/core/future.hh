@@ -925,6 +925,7 @@ public:
 
     template <typename... A>
     void set_value(A&&... a) noexcept {
+        deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), this);
         if (auto *s = get_state()) {
             s->set(std::forward<A>(a)...);
             make_ready<urgent::no>();
@@ -1596,6 +1597,7 @@ private:
         typename futurator::type fut(future_for_get_promise_marker{});
         using pr_type = decltype(fut.get_promise());
         schedule(fut.get_promise(), std::move(func), [](pr_type&& pr, Func& func, future_state&& state) {
+            deadlock_detection::attach_func_type<Func>(&pr);
             if (state.failed()) {
                 deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), &pr);
                 pr.set_exception(static_cast<future_state_base&&>(std::move(state)));
@@ -1701,6 +1703,7 @@ private:
         typename futurator::type fut(future_for_get_promise_marker{});
         using pr_type = decltype(fut.get_promise());
         schedule(fut.get_promise(), std::move(func), [](pr_type&& pr, Func& func, future_state&& state) {
+            deadlock_detection::attach_func_type<Func>(&pr);
             futurator::satisfy_with_result_of(std::move(pr), [&func, &state] {
                 return func(future(std::move(state)));
             });
@@ -2164,7 +2167,7 @@ void futurize<T>::satisfy_with_result_of(promise_base_with_type&& pr, Func&& fun
     using ret_t = decltype(func());
     deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), &pr);
     //deadlock_detection::attach_func_type<Func>(deadlock_detection::get_current_traced_ptr());
-    deadlock_detection::attach_func_type<Func>(&pr);
+    //deadlock_detection::attach_func_type<Func>(&pr);
     if constexpr (std::is_void_v<ret_t>) {
         func();
         pr.set_value();

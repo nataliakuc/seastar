@@ -147,6 +147,10 @@ private:
         return has_available_units(nr) && _wait_list.empty();
     }
 public:
+    basic_semaphore(basic_semaphore&&) = default;
+    ~basic_semaphore() {
+        deadlock_detection::trace_semaphore_destructor(this);
+    }
     /// Returns the maximum number of units the semaphore counter can hold
     static constexpr size_t max_counter() {
         return std::numeric_limits<decltype(_count)>::max();
