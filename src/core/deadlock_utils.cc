@@ -23,7 +23,6 @@
 #include <sys/types.h>
 #include <seastar/core/internal/deadlock_utils.hh>
 #include <seastar/core/task.hh>
-#include <seastar/core/future.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/json/formatter.hh>
 #include <seastar/json/json_elements.hh>
@@ -31,8 +30,8 @@
 #include <fstream>
 #include <string>
 
-
-using dumped_type = std::variant<std::string, uintptr_t, std::nullptr_t>;
+struct json_object;
+using dumped_type = std::variant<std::string, uintptr_t, std::nullptr_t, std::map<const char*, json_object>>;
 
 struct json_object : public seastar::json::jsonable {
     dumped_type _value;
@@ -45,6 +44,7 @@ struct json_object : public seastar::json::jsonable {
         }
     }
     json_object(uintptr_t value) : _value(value) {}
+    json_object(std::map<const char*, json_object> value) : _value(value) {}
     std::string to_json() const override {
         if (auto ptr = std::get_if<std::string>(&_value)) {
             return "\"" + *ptr + "\"";
@@ -52,8 +52,11 @@ struct json_object : public seastar::json::jsonable {
         if (auto ptr = std::get_if<uintptr_t>(&_value)) {
             return std::to_string(*ptr);
         }
+        if (auto ptr = std::get_if<std::map<const char*, json_object>>(&_value)) {
+            return seastar::json::formatter::to_json(*ptr);
+        }
         if (auto ptr = std::get_if<std::nullptr_t>(&_value)) {
-            (void) ptr;
+            (void)ptr;
             return "null";
         }
         throw std::bad_variant_access();
@@ -88,22 +91,34 @@ static runtime_vertex& current_traced_ptr() {
 }
 
 /// Serializes and writes data to appropriate file.
-template <typename T>
-static void write_data(T data) {
+static void write_data(dumped_value data) {
+    auto now = std::chrono::steady_clock::now();
+    auto nanoseconds = std::chrono::nanoseconds(now.time_since_epoch()).count();
+    data.emplace("timestamp", nanoseconds);
     std::string serialized = json::formatter::to_json(data);
     get_output_stream() << serialized << std::endl;
 }
 
 /// Converts runtime vertex to serializable data.
 static dumped_value serialize_vertex(runtime_vertex v) {
-    return {{"value", v.get_ptr()},
+    return {{"address", v.get_ptr()},
             {"base_type", v._base_type->name()},
             {"type", v._type->name()}};
+}
+
+/// Converts runtime vertex to serializable data without debug info.
+static dumped_value serialize_vertex_short(runtime_vertex v) {
+    return {{"address", v.get_ptr()}};
 }
 
 /// Converts semaphore to serializable data.
 static dumped_value serialize_semaphore(const void* sem, size_t count) {
     return {{"address", reinterpret_cast<uintptr_t>(sem)}, {"available_units", count}};
+}
+
+/// Converts semaphore to serializable data without debug info.
+static dumped_value serialize_semaphore_short(const void* sem) {
+    return {{"address", reinterpret_cast<uintptr_t>(sem)}};
 }
 
 runtime_vertex get_current_traced_ptr() {
@@ -120,47 +135,59 @@ current_traced_vertex_updater::~current_traced_vertex_updater() {
 }
 
 void trace_edge(runtime_vertex pre, runtime_vertex post, bool speculative) {
-    std::map<const char*, dumped_value> edge{
+    dumped_value data{
+            {"type", "edge"},
             {"pre", serialize_vertex(pre)},
             {"post", serialize_vertex(post)},
+            {"speculative", std::to_string(speculative)}
     };
-    const char* name = speculative ? "edge" : "edge_speculative";
-    std::map<const char*, decltype(edge)> data{{name, edge}};
     write_data(data);
 }
 
 void trace_vertex_constructor(runtime_vertex v) {
-    std::map<const char*, dumped_value> data{{"constructor", serialize_vertex(v)}};
+    dumped_value data{
+            {"type", "vertex_ctor"},
+            {"vertex", serialize_vertex(v)}
+    };
     write_data(data);
 }
 
 void trace_vertex_destructor(runtime_vertex v) {
-    std::map<const char*, dumped_value> data{{"destructor", serialize_vertex(v)}};
+    dumped_value data{
+            {"type", "vertex_dtor"},
+            {"vertex", serialize_vertex(v)}
+    };
     write_data(data);
 }
 
 void trace_semaphore_constructor(const void* sem, size_t count) {
-    auto serialized_sem = serialize_semaphore(sem, count);
-    std::map<const char*, dumped_value> data{{"semaphore_constructor", serialized_sem}};
+    dumped_value data{
+            {"type", "sem_ctor"},
+            {"sem", serialize_semaphore(sem, count)}
+    };
     write_data(data);
 }
 
 void trace_semaphore_destructor(const void* sem, size_t count) {
-    auto serialized_sem = serialize_semaphore(sem, count);
-    std::map<const char*, dumped_value> data{{"semaphore_destructor", serialized_sem}};
+    dumped_value data{
+            {"type", "sem_dtor"},
+            {"sem", serialize_semaphore(sem, count)}
+    };
     write_data(data);
 }
 
 void attach_func_type(runtime_vertex ptr, const std::type_info& func_type, const char* file, uint32_t line) {
-    std::map<const char*, dumped_value> data{{"attach_func_type", {
-        {"value", ptr.get_ptr()}, 
-        {"type", func_type.name()},
-        {"file", std::string(file)},
-        {"line", line}}}};
+    dumped_value data{
+            {"type", "attach_func_type"},
+            {"vertex", serialize_vertex(ptr)},
+            {"type", func_type.name()},
+            {"file", std::string(file)},
+            {"line", line}
+    };
     write_data(data);
 }
 
-void move_vertex(runtime_vertex from, runtime_vertex to) {
+void trace_move_vertex(runtime_vertex from, runtime_vertex to) {
     trace_vertex_constructor(to);
     trace_edge(from, to);
     trace_vertex_destructor(from);
@@ -168,31 +195,33 @@ void move_vertex(runtime_vertex from, runtime_vertex to) {
 }
 
 
-void trace_semaphore_signal_caller(const void* sem, size_t count, runtime_vertex caller) {
-    std::map<const char*, dumped_value> data{{
-            "semaphore_signal_caller", {
-                    {"address", reinterpret_cast<uintptr_t>(sem)},
-                    {"count", count},
-                    {"caller", caller.get_ptr()}}}};
+void trace_semaphore_signal(const void* sem, size_t count, runtime_vertex caller) {
+    dumped_value data{
+            {"type", "sem_signal"},
+            {"sem", serialize_semaphore_short(sem)},
+            {"count", count},
+            {"vertex", caller.get_ptr()}
+    };
     write_data(data);
 }
 
-void trace_semaphore_signal_schedule(const void* sem, runtime_vertex unlocked) {
-    std::map<const char*, dumped_value> data{{
-            "semaphore_signal_schedule",
-            {{"address", reinterpret_cast<uintptr_t>(sem)},
-                    {"callee", unlocked.get_ptr()}}
-    }};
+void trace_semaphore_wait_completed(const void* sem, runtime_vertex post) {
+    dumped_value data{
+            {"type", "sem_wait_completed"},
+            {"sem", serialize_semaphore_short(sem)},
+            {"post", serialize_vertex_short(post)}
+    };
     write_data(data);
 }
 
-void trace_semaphore_wait(const void* sem, size_t count, runtime_vertex caller) {
-    std::map<const char*, dumped_value> data{{
-            "semaphore_wait",
-            {{"address", reinterpret_cast<uintptr_t>(sem)},
-                    {"caller", caller.get_ptr()},
-                    {"count", count}}
-    }};
+void trace_semaphore_wait(const void* sem, size_t count, runtime_vertex pre, runtime_vertex post) {
+    dumped_value data{
+            {"type", "sem_wait"},
+            {"sem", serialize_semaphore_short(sem)},
+            {"pre", serialize_vertex_short(pre)},
+            {"post", serialize_vertex_short(post)},
+            {"count", count}
+    };
     write_data(data);
 }
 

@@ -1162,7 +1162,7 @@ protected:
     }
 
     void move_it(future_base&& x, future_state_base* state) noexcept {
-        deadlock_detection::move_vertex(&x, this);
+        deadlock_detection::trace_move_vertex(&x, this);
 
         _promise = x._promise;
         if (auto* p = _promise) {

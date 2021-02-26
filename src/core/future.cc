@@ -54,7 +54,7 @@ namespace internal {
 static_assert(std::is_empty<uninitialized_wrapper<std::tuple<>>>::value, "This should still be empty");
 
 void promise_base::move_it(promise_base&& x) noexcept {
-    deadlock_detection::move_vertex(&x, this);
+    deadlock_detection::trace_move_vertex(&x, this);
 
     // Don't use std::exchange to make sure x's values are nulled even
     // if &x == this.

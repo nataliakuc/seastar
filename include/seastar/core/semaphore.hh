@@ -197,7 +197,8 @@ public:
         if (may_proceed(nr)) {
             _count -= nr;
             auto fut = make_ready_future<>();
-            deadlock_detection::trace_semaphore_wait(this, nr, &fut);
+            deadlock_detection::trace_semaphore_wait(this, nr, deadlock_detection::get_current_traced_ptr(), &fut);
+            deadlock_detection::trace_semaphore_wait_completed(this, &fut);
             return fut;
         }
         if (_ex) {
@@ -207,7 +208,7 @@ public:
         auto fut = e.pr.get_future();
         try {
             _wait_list.push_back(std::move(e), timeout);
-            deadlock_detection::trace_semaphore_wait(this, nr, &fut);
+            deadlock_detection::trace_semaphore_wait(this, nr, deadlock_detection::get_current_traced_ptr(), &e.pr);
         } catch (...) {
             e.pr.set_exception(std::current_exception());
         }
@@ -240,7 +241,7 @@ public:
     ///
     /// \param nr Number of units to deposit (default 1).
     void signal(size_t nr = 1) {
-        deadlock_detection::trace_semaphore_signal_caller(this, nr, deadlock_detection::get_current_traced_ptr());
+        deadlock_detection::trace_semaphore_signal(this, nr, deadlock_detection::get_current_traced_ptr());
         if (_ex) {
             return;
         }
@@ -248,7 +249,7 @@ public:
         while (!_wait_list.empty() && has_available_units(_wait_list.front().nr)) {
             auto& x = _wait_list.front();
             _count -= x.nr;
-            deadlock_detection::trace_semaphore_signal_schedule(this, &x.pr);
+            deadlock_detection::trace_semaphore_wait_completed(this, &x.pr);
             x.pr.set_value();
             _wait_list.pop_front();
         }

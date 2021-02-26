@@ -128,24 +128,24 @@ void inline trace_semaphore_destructor(const basic_semaphore<T1, T2>* sem) {
 }
 
 /// Traces calling of signal on semaphore by certain runtime vertex.
-void trace_semaphore_signal_caller(const void* sem, size_t count, runtime_vertex caller);
+void trace_semaphore_signal(const void* sem, size_t count, runtime_vertex caller);
 template <typename T1, typename T2>
 void inline trace_semaphore_signal_caller(const basic_semaphore<T1, T2>* sem, size_t count, runtime_vertex caller) {
-    trace_semaphore_signal_caller(static_cast<const void*>(sem), count, caller);
+    trace_semaphore_signal(static_cast<const void*>(sem), count, caller);
 }
 
 /// Traces scheduling of runtime vertex after signal was called on semaphore.
-void trace_semaphore_signal_schedule(const void* sem, runtime_vertex unlocked);
+void trace_semaphore_wait_completed(const void* sem, runtime_vertex post);
 template <typename T1, typename T2>
-void inline trace_semaphore_signal_schedule(const basic_semaphore<T1, T2>* sem, runtime_vertex unlocked) {
-    trace_semaphore_signal_schedule(static_cast<const void*>(sem), unlocked);
+void inline trace_semaphore_signal_schedule(const basic_semaphore<T1, T2>* sem, runtime_vertex post) {
+    trace_semaphore_wait_completed(static_cast<const void*>(sem), post);
 }
 
 /// Traces successful wait on a semaphore with the vertex that is result of wait.
-void trace_semaphore_wait(const void* sem, size_t count, runtime_vertex caller);
+void trace_semaphore_wait(const void* sem, size_t count, runtime_vertex pre, runtime_vertex post);
 template <typename T1, typename T2>
-void inline trace_semaphore_wait(const basic_semaphore<T1, T2>* sem, size_t count, runtime_vertex caller) {
-    trace_semaphore_wait(static_cast<const void*>(sem), count, caller);
+void inline trace_semaphore_wait(const basic_semaphore<T1, T2>* sem, size_t count, runtime_vertex pre, runtime_vertex post) {
+    trace_semaphore_wait(static_cast<const void*>(sem), count, pre, post);
 }
 
 void attach_func_type(runtime_vertex pt, const std::type_info& func_typ, const char* file = __builtin_FILE(), uint32_t line = __builtin_LINE());
@@ -154,7 +154,7 @@ void inline attach_func_type(runtime_vertex ptr, const char* file = __builtin_FI
     attach_func_type(ptr, typeid(FuncType), file, line);
 }
 
-void move_vertex(runtime_vertex from, runtime_vertex to);
+void trace_move_vertex(runtime_vertex from, runtime_vertex to);
 
 }
 
@@ -166,11 +166,14 @@ namespace deadlock_detection {
 constexpr void trace_edge(void*, void*, bool = false) {}
 constexpr void trace_vertex_constructor(void*) {}
 constexpr void trace_vertex_destructor(void*) {}
+constexpr void trace_move_vertex(const void*, const void*) {}
+template <typename>
+constexpr void attach_func_type(const void*, const char* = nullptr, uint32_t  = 0) {}
 constexpr void trace_semaphore_constructor(const void*) {}
 constexpr void trace_semaphore_destructor(const void*) {}
-constexpr void trace_semaphore_signal_caller(const void*, size_t, const void*) {}
-constexpr void trace_semaphore_signal_schedule(const void*, const void*) {}
-constexpr void trace_semaphore_wait(const void*, size_t, const void*) {}
+constexpr void trace_semaphore_signal(const void*, size_t, const void*) {}
+constexpr void trace_semaphore_wait_completed(const void*, const void*) {}
+constexpr void trace_semaphore_wait(const void*, size_t, const void*, const void*) {}
 
 constexpr std::nullptr_t get_current_traced_ptr() {
     return nullptr;
