@@ -24,46 +24,65 @@
 #include <seastar/core/internal/deadlock_utils.hh>
 #include <seastar/core/task.hh>
 #include <seastar/core/reactor.hh>
-#include <seastar/json/formatter.hh>
-#include <seastar/json/json_elements.hh>
 #include <map>
 #include <fstream>
 #include <string>
 
 struct json_object;
-using dumped_type = std::variant<std::string, uintptr_t, std::nullptr_t, std::map<const char*, json_object>>;
 
-struct json_object : public seastar::json::jsonable {
+using dumped_value = std::vector<std::pair<const char*, json_object>>;
+using dumped_type = std::variant<const char*, std::string, bool, uintmax_t, std::nullptr_t, dumped_value>;
+
+struct json_object {
     dumped_type _value;
-    json_object(std::string value) : _value(std::move(value)) {}
     json_object(const char* value) {
         if (value) {
-            _value = std::string(value);
+            _value = value;
         } else {
             _value = nullptr;
         }
     }
-    json_object(uintptr_t value) : _value(value) {}
-    json_object(std::map<const char*, json_object> value) : _value(value) {}
-    std::string to_json() const override {
-        if (auto ptr = std::get_if<std::string>(&_value)) {
-            return "\"" + *ptr + "\"";
-        }
-        if (auto ptr = std::get_if<uintptr_t>(&_value)) {
-            return std::to_string(*ptr);
-        }
-        if (auto ptr = std::get_if<std::map<const char*, json_object>>(&_value)) {
-            return seastar::json::formatter::to_json(*ptr);
-        }
-        if (auto ptr = std::get_if<std::nullptr_t>(&_value)) {
-            (void)ptr;
-            return "null";
-        }
-        throw std::bad_variant_access();
-    }
+    json_object(std::string value) : _value(std::move(value)) {}
+    json_object(dumped_value value) : _value(std::move(value)) {}
+    template <typename T, std::enable_if_t<!std::is_same_v<T, bool> && std::is_integral_v<T>, bool> = true>
+    json_object(T value) : _value(uintmax_t(value)) {}
+    template <typename T, std::enable_if_t<std::is_same_v<T, bool>, bool> = true>
+    json_object(T value) : _value(bool(value)) {}
+
+    friend std::ostream& operator<<(std::ostream& s, const json_object& obj);
 };
 
-using dumped_value = std::map<const char*, json_object>;
+template <typename> inline constexpr bool always_false_v = false;
+
+std::ostream& operator<<(std::ostream& s, const json_object& obj) {
+    std::visit([&s](const auto& arg) {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, const char*> or std::is_same_v<T, std::string>) {
+            s << "\"" << arg << "\"";
+        } else if constexpr (std::is_same_v<T, uintmax_t>) {
+            s << arg;
+        } else if constexpr (std::is_same_v<T, dumped_value>) {
+            s << "{";
+            bool started = false;
+            for (const auto& elem : arg) {
+                if (started) {
+                    s << ", ";
+                }
+                s << "\"" << elem.first << "\": " << elem.second;
+                started = true;
+            }
+            s << "}";
+        } else if constexpr (std::is_same_v<T, bool>) {
+            s << (arg ? "true" : "false");
+        } else if constexpr (std::is_same_v<T, std::nullptr_t>) {
+            s << "null";
+        } else {
+            static_assert(always_false_v<T>, "non-exhaustive visitor!");
+        }
+    }, obj._value);
+    return s;
+}
+
 
 namespace seastar::deadlock_detection {
 
@@ -94,9 +113,8 @@ static runtime_vertex& current_traced_ptr() {
 static void write_data(dumped_value data) {
     auto now = std::chrono::steady_clock::now();
     auto nanoseconds = std::chrono::nanoseconds(now.time_since_epoch()).count();
-    data.emplace("timestamp", nanoseconds);
-    std::string serialized = json::formatter::to_json(data);
-    get_output_stream() << serialized << std::endl;
+    data.emplace_back("timestamp", nanoseconds);
+    get_output_stream() << json_object(std::move(data)) << std::endl;
 }
 
 /// Converts runtime vertex to serializable data.
@@ -139,7 +157,7 @@ void trace_edge(runtime_vertex pre, runtime_vertex post, bool speculative) {
             {"type", "edge"},
             {"pre", serialize_vertex(pre)},
             {"post", serialize_vertex(post)},
-            {"speculative", std::to_string(speculative)}
+            {"speculative", speculative}
     };
     write_data(data);
 }
@@ -181,7 +199,7 @@ void attach_func_type(runtime_vertex ptr, const std::type_info& func_type, const
             {"type", "attach_func_type"},
             {"vertex", serialize_vertex(ptr)},
             {"type", func_type.name()},
-            {"file", std::string(file)},
+            {"file", file},
             {"line", line}
     };
     write_data(data);
