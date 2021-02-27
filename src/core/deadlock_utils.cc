@@ -198,7 +198,7 @@ void attach_func_type(runtime_vertex ptr, const std::type_info& func_type, const
     dumped_value data{
             {"type", "attach_func_type"},
             {"vertex", serialize_vertex(ptr)},
-            {"type", func_type.name()},
+            {"fun_type", func_type.name()},
             {"file", file},
             {"line", line}
     };
