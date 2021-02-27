@@ -147,7 +147,12 @@ private:
         return has_available_units(nr) && _wait_list.empty();
     }
 public:
-    basic_semaphore(basic_semaphore&&) = default;
+    basic_semaphore(basic_semaphore&& other) : _count(other._count), _ex(std::move(other._ex)), _wait_list(std::move(other._wait_list)) {
+        // In order for semaphore to work at all, the semaphore that has issued any waits
+        // cannot be moved, therefore we just mark the creation and deletion, and not any edge
+        // in between.
+        deadlock_detection::trace_semaphore_constructor(this);
+    };
     ~basic_semaphore() {
         deadlock_detection::trace_semaphore_destructor(this);
     }
