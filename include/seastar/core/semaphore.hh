@@ -152,7 +152,7 @@ public:
         // cannot be moved, therefore we just mark the creation and deletion, and not any edge
         // in between.
         deadlock_detection::trace_semaphore_constructor(this);
-    };
+    }
     ~basic_semaphore() {
         deadlock_detection::trace_semaphore_destructor(this);
     }

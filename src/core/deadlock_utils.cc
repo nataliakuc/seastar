@@ -26,12 +26,13 @@
 #include <seastar/core/reactor.hh>
 #include <map>
 #include <fstream>
-#include <string>
+#include <seastar/core/sstring.hh>
 
 struct json_object;
 
+using bigger_sstring = seastar::basic_sstring<char, uint32_t, 127>;
 using dumped_value = std::vector<std::pair<const char*, json_object>>;
-using dumped_type = std::variant<const char*, std::string, bool, uintmax_t, std::nullptr_t, dumped_value>;
+using dumped_type = std::variant<const char*, bigger_sstring, bool, uintmax_t, std::nullptr_t, dumped_value>;
 
 struct json_object {
     dumped_type _value;
@@ -42,7 +43,7 @@ struct json_object {
             _value = nullptr;
         }
     }
-    json_object(std::string value) : _value(std::move(value)) {}
+    json_object(bigger_sstring value) : _value(std::move(value)) {}
     json_object(dumped_value value) : _value(std::move(value)) {}
     template <typename T, std::enable_if_t<!std::is_same_v<T, bool> && std::is_integral_v<T>, bool> = true>
     json_object(T value) : _value(uintmax_t(value)) {}
@@ -57,7 +58,7 @@ template <typename> inline constexpr bool always_false_v = false;
 std::ostream& operator<<(std::ostream& s, const json_object& obj) {
     std::visit([&s](const auto& arg) {
         using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, const char*> or std::is_same_v<T, std::string>) {
+        if constexpr (std::is_same_v<T, const char*> or std::is_same_v<T, bigger_sstring>) {
             s << "\"" << arg << "\"";
         } else if constexpr (std::is_same_v<T, uintmax_t>) {
             s << arg;
