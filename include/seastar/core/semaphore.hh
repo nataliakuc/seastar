@@ -213,7 +213,7 @@ public:
         auto fut = e.pr.get_future();
         try {
             _wait_list.push_back(std::move(e), timeout);
-            deadlock_detection::trace_semaphore_wait(this, nr, deadlock_detection::get_current_traced_ptr(), &e.pr);
+            deadlock_detection::trace_semaphore_wait(this, nr, deadlock_detection::get_current_traced_ptr(), &fut);
         } catch (...) {
             e.pr.set_exception(std::current_exception());
         }
