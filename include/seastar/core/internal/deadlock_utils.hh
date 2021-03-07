@@ -174,6 +174,7 @@ constexpr void trace_semaphore_destructor(const void*) {}
 constexpr void trace_semaphore_signal(const void*, size_t, const void*) {}
 constexpr void trace_semaphore_wait_completed(const void*, const void*) {}
 constexpr void trace_semaphore_wait(const void*, size_t, const void*, const void*) {}
+constexpr void attach_func_type(const void*, const char* = nullptr, const char* = nullptr, uint32_t = 0) {}
 
 constexpr std::nullptr_t get_current_traced_ptr() {
     return nullptr;
