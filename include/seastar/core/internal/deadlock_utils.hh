@@ -155,6 +155,7 @@ void inline attach_func_type(runtime_vertex ptr, const char* file = __builtin_FI
 }
 
 void trace_move_vertex(runtime_vertex from, runtime_vertex to);
+void trace_move_semaphore(const void* from, const void* to);
 
 }
 
@@ -167,6 +168,7 @@ constexpr void trace_edge(void*, void*, bool = false) {}
 constexpr void trace_vertex_constructor(void*) {}
 constexpr void trace_vertex_destructor(void*) {}
 constexpr void trace_move_vertex(const void*, const void*) {}
+constexpr void trace_move_semaphore(const void*, const void*) {}
 template <typename>
 constexpr void attach_func_type(const void*, const char* = nullptr, uint32_t  = 0) {}
 constexpr void trace_semaphore_constructor(const void*) {}

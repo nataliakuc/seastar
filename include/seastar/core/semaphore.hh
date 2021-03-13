@@ -151,7 +151,7 @@ public:
         // In order for semaphore to work at all, the semaphore that has issued any waits
         // cannot be moved, therefore we just mark the creation and deletion, and not any edge
         // in between.
-        deadlock_detection::trace_semaphore_constructor(this);
+        deadlock_detection::trace_move_semaphore(&other, this);
     }
     ~basic_semaphore() {
         deadlock_detection::trace_semaphore_destructor(this);
@@ -213,7 +213,7 @@ public:
         auto fut = e.pr.get_future();
         try {
             _wait_list.push_back(std::move(e), timeout);
-            deadlock_detection::trace_semaphore_wait(this, nr, deadlock_detection::get_current_traced_ptr(), &fut);
+            deadlock_detection::trace_semaphore_wait(this, nr, deadlock_detection::get_current_traced_ptr(), &e.pr);
         } catch (...) {
             e.pr.set_exception(std::current_exception());
         }
@@ -254,8 +254,8 @@ public:
         while (!_wait_list.empty() && has_available_units(_wait_list.front().nr)) {
             auto& x = _wait_list.front();
             _count -= x.nr;
-            deadlock_detection::trace_semaphore_wait_completed(this, &x.pr);
             x.pr.set_value();
+            deadlock_detection::trace_semaphore_wait_completed(this, &x.pr);
             _wait_list.pop_front();
         }
     }

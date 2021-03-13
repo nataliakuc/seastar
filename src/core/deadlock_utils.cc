@@ -199,7 +199,7 @@ void attach_func_type(runtime_vertex ptr, const std::type_info& func_type, const
     dumped_value data{
             {"type", "attach_func_type"},
             {"vertex", serialize_vertex(ptr)},
-            {"fun_type", func_type.name()},
+            {"func_type", func_type.name()},
             {"file", file},
             {"line", line}
     };
@@ -207,12 +207,22 @@ void attach_func_type(runtime_vertex ptr, const std::type_info& func_type, const
 }
 
 void trace_move_vertex(runtime_vertex from, runtime_vertex to) {
-    trace_vertex_constructor(to);
-    trace_edge(from, to);
-    trace_vertex_destructor(from);
-    trace_vertex_constructor(from);
+    dumped_value data{
+        {"type", "vertex_move"},
+        {"from", serialize_vertex_short(from)},
+        {"to", serialize_vertex_short(to)}
+    };
+    write_data(data);
 }
 
+void trace_move_semaphore(const void* from, const void* to) {
+    dumped_value data{
+        {"type", "sem_move"},
+        {"from", serialize_semaphore_short(from)},
+        {"to", serialize_semaphore_short(to)}
+    };
+    write_data(data);
+}
 
 void trace_semaphore_signal(const void* sem, size_t count, runtime_vertex caller) {
     dumped_value data{
