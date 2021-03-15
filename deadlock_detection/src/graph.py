@@ -13,9 +13,18 @@ class Operation:
     semaphore_id: Union[int, None]
     modification: int
 
-    def __init__(self, id: Union[int, None], modification: int):
-        self.semaphore_id = id
+    def __init__(self, semaphore_id: Union[int, None], modification: int):
+        self.semaphore_id = semaphore_id
         self.modification = modification
+
+    def __str__(self):
+        if self.modification == 0:
+            return "Empty operation\n"
+
+        if self.modification > 0:
+            return "Signal with " + str(self.modification) + " on semaphore with id " + str(self.semaphore_id) + "\n"
+
+        return "Wait for " + str(-self.modification) + " on semaphore with id " + str(self.semaphore_id) + "\n"
 
     # If modification is 0 then the operation does nothing
     def is_none(self):
@@ -33,13 +42,32 @@ class Operation:
 #                          while o remains in the queue
 class Semaphore:
     id: int
+    original_id: int
     count: int
     queue: list[tuple['Node', int]]
 
-    def __init__(self, id: int, count: int):
+    def __init__(self, id: int, count: int, original_id: int):
         self.id = id
         self.count = count
         self.queue = []
+        self.original_id = original_id
+
+    def __str__(self):
+        basic_info = "Semaphore with id " + str(self.id) + " has " + str(self.count) + " units\n"
+        if len(self.queue) == 0:
+            return basic_info + "\n"
+
+        queue_info = "Semaphore's queue:\n"
+        for node in self.queue:
+            queue_info += "Index in execution chain: " + str(node[1]) + "\n"
+            queue_info += str(node[0])
+
+        return basic_info + queue_info + "\n"
+
+    def get_debug_information(self) -> dict[str, any]:
+        result = {"sem_id": self.original_id, "unit_count": self.count, "waiting": len(self.queue)}
+        result["queue"] = [operation.get_debug_info() for operation, _ in self.queue]
+        return result
 
     # Performs the given operation, that has a given index and restricted processes set
     def do_operation(self, operation: 'Node', index: int) -> bool:
@@ -89,6 +117,43 @@ class Execution:
         self.previous_node_finished_count = dict()
         self.waiting_on_semaphore = set()
 
+    def __str__(self):
+        result = ""
+        result += "Semaphores' state:\n"
+        for _, semaphore in self.semaphores.items():
+            result += str(semaphore)
+
+        result += "\n"
+
+        if len(self.execution_chain) <= 20:
+            for index, node in enumerate(self.execution_chain):
+                if self.executed[index] == 1:
+                    result += "\u001b[32m" + "Executed: \u001b[0m\n"
+                else:
+                    result += "\u001b[31m" + "Not executed: \u001b[0m\n"
+
+                result += str(node)
+                result += "\n"
+
+        else:
+            for index in range(self.first_possible_index,
+                               min(len(self.execution_chain), self.first_possible_index + 20)):
+                if self.executed[index] == 1:
+                    result += "Operation with index " + str(index) + " was executed: \n"
+                else:
+                    result += "Operation with index " + str(index) + " was not executed: \n"
+
+                result += str(self.execution_chain[index])
+
+        return result
+
+    def get_debug_info(self) -> [dict[str, any]]:
+        result = []
+        for semaphore in self.semaphores.values():
+            result.append(semaphore.get_debug_information())
+
+        return result
+
     # Function that checks if the given operation can be executed
     def is_executable(self, operation: 'Node') -> bool:
         return self.previous_node_finished_count.get(operation,
@@ -102,10 +167,17 @@ class Execution:
     # if operation needs to wait on its semaphore then returns False
     # Otherwise returns True
     def do_operation(self, operation: 'Node', index: int) -> bool:
+        assert(self.executed[index] == 0)
         if operation.operation.is_none():
             self.mark_executed(operation)
             self.executed_count += 1
             self.executed[index] = 1
+
+            if index == self.first_possible_index:
+                self.first_possible_index += 1
+                while self.first_possible_index < len(self.executed) and self.executed[self.first_possible_index]:
+                    self.first_possible_index += 1
+
             return True
 
         operation_semaphore: Semaphore = self.semaphores[operation.operation.semaphore_id]
@@ -118,6 +190,11 @@ class Execution:
             self.mark_executed(operation)
             self.executed_count += 1
             self.executed[index] = 1
+
+            if index == self.first_possible_index:
+                self.first_possible_index += 1
+                while self.first_possible_index < len(self.executed) and self.executed[self.first_possible_index]:
+                    self.first_possible_index += 1
             return True
 
     # A function that looks for a next operation that can be executed
@@ -130,19 +207,24 @@ class Execution:
 
         # If the first possible operation can be executed it is returned
         if self.is_executable(self.execution_chain[self.first_possible_index]):
-            self.first_possible_index += 1
-            return self.execution_chain[self.first_possible_index - 1], self.first_possible_index - 1
+            assert(self.executed[self.first_possible_index] == 0)
+            return_index = self.first_possible_index
+
+            return self.execution_chain[return_index], return_index
 
         # The semaphores are checked to find a next operation
         for _, semaphore in self.semaphores.items():
             operation, index = semaphore.try_get_operation()
             if operation is not None:
                 self.waiting_on_semaphore.remove(operation)
+
                 return operation, index
 
         # Execution chain is checked for executable operations
         for i in range(self.first_possible_index + 1, len(self.execution_chain)):
-            if not self.executed[i] and self.is_executable(self.execution_chain[i]):
+            if not self.executed[i] and self.is_executable(self.execution_chain[i]) and self.execution_chain[
+                i].operation.modification >= 0:
+
                 return self.execution_chain[i], i
 
         return None, -1
@@ -150,6 +232,7 @@ class Execution:
     # A function that attempts to execute all the operation from the execution chain
     # returns False if it fails and True otherwise
     def try_executing(self) -> bool:
+        assert(len(self.previous_node_finished_count) == 0)
         while True:
             next_operation, index = self.next_possible_operation()
             if next_operation is None:
@@ -167,19 +250,39 @@ class Execution:
 #   next : list of edges from this Node to other
 class Node:
     operation: Operation
-    next: List['Node']
+    next: Set['Node']
     prev_count: int
+    original_post: int
 
-    def __init__(self, operation: Operation = Operation(None, 0)):
+    def __init__(self, original_post: int, operation: Operation = Operation(None, 0)):
+        self.original_post = original_post
         self.operation = operation
-        self.next = []
+        self.next = set()
         self.prev_count = 0
+
+    def __str__(self):
+        return str(self.operation)
+
+    def get_debug_info(self) -> dict[str, Union[str, int]]:
+        operation = self.operation
+        post = self.original_post
+        type = ""
+        count = operation.modification
+        if count > 0:
+            type = "signal"
+        if count == 0:
+            type = "none"
+        if count < 0:
+            type = "wait"
+            count = -count
+
+        return {"original_post": post, "type": type, "count": count}
 
     def add_parent(self):
         self.prev_count += 1
 
     def add_child(self, child: 'Node'):
-        self.next.append(child)
+        self.next.add(child)
         child.add_parent()
 
     def is_none(self):
@@ -188,14 +291,17 @@ class Node:
     # erases Nodes with None operation everywhere except for the first one
     def erase_none(self):
         ind = 0
+        next_list = list(self.next)
 
-        while ind < len(self.next):
-            if (self.next[ind]).is_none():
-                self.next += self.next[ind].next
-                self.next.pop(ind)
+        while ind < len(next_list):
+            if (next_list[ind]).is_none():
+                next_list += list(next_list[ind].next)
+                next_list.pop(ind)
 
             else:
                 ind += 1
+
+        self.next = set(next_list)
 
         for child in self.next:
             child.erase_none()
@@ -222,16 +328,20 @@ class Graph:
 
     # Gets some execution chain and checks if it can lead to a deadlock.
     # Returns true if there is no deadlock.
-    def check_execution(self, execution_chain: List['Node']) -> bool:
+    def check_execution(self, execution_chain: List['Node']) -> tuple[bool, Union[Execution, None]]:
         execution = Execution(self.semaphores, execution_chain)
-        return execution.try_executing()
+        res = execution.try_executing()
+        if res:
+            return res, None
+        return res, execution
 
     # Generate all possible execution chains. For each of them run check_execution.
     # All the possible execution chains are in fact all the topological sorts of our graph.
     # The method uses algorithm that finds all topological sorts of DAG
     # (https://www.geeksforgeeks.org/all-topological-sorts-of-a-directed-acyclic-graph/).
     # Returns true if there is no deadlock.
-    def check_all_possible_executions(self, res: List['Node'], nodes: List[Node]) -> bool:
+    def check_all_possible_executions(self, res: List['Node'], nodes: List[Node]) -> tuple[
+        bool, Union[Execution, None]]:
         flag = False
 
         for node in list(nodes):
@@ -242,8 +352,9 @@ class Graph:
 
             res.append(node)
 
-            if not self.check_all_possible_executions(res, nodes):
-                return False
+            result, execution = self.check_all_possible_executions(res, nodes)
+            if not result:
+                return result, execution
 
             res.pop(-1)
 
@@ -257,13 +368,13 @@ class Graph:
         if not flag:
             return self.check_execution(res)
 
-        return True
+        return True, None
 
     # For each subset of semaphores of size not greater than 3, 
     # remove from graph all the semaphores except those in the subset.
     # Then run check_all_possible_executions on the obtained graph.
     # Returns true if there is no deadlock.
-    def is_deadlock_free(self) -> bool:
+    def is_deadlock_free(self) -> tuple[bool, Union[None, Execution]]:
         for _, i in self.semaphores.items():
             for _, j in self.semaphores.items():
                 for _, k in self.semaphores.items():
@@ -273,6 +384,7 @@ class Graph:
                                                         [sem.id for sem in [i, j, k]])
                         simplified_graph.semaphores = {sem.id: copy.deepcopy(sem) for sem in [i, j, k]}
                         simplified_graph.root.erase_none()
-                        if not simplified_graph.check_all_possible_executions([], [simplified_graph.root]):
-                            return False
-        return True
+                        res, execution = simplified_graph.check_all_possible_executions([], [simplified_graph.root])
+                        if not res:
+                            return res, execution
+        return True, None

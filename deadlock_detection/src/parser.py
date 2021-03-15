@@ -1,49 +1,48 @@
-import pandas as pd
 import graph
 import json
 
-from typing import Dict, Tuple
-
+from typing import Dict
+InvalidPost = -5
 
 class GraphParser:
-    df: pd.DataFrame  # Structure storing JSON data
+    data: list[Dict]
     free_addr: int  # The smallest free address for graph nodes
 
     # Initializes GraphParser with data being a list of JSONs
     def __init__(self, data):
         data = list(map(lambda a: json.loads(a), data))
         data.sort(key=lambda a: a["timestamp"])
-        self.df = pd.DataFrame(data)
+        self.data = data
         self.free_addr = 0
 
     def update_free_addr(self, addresses):
         while self.free_addr in addresses:
             self.free_addr += 1
 
-    def build_graph(self) -> Tuple[graph.Node, Dict[int, graph.Semaphore]]:
+    def build_graph(self) -> tuple[graph.Node, Dict[int, graph.Semaphore]]:
         # Find all the semaphores
         semaphores = {}
 
-        for (_, elt) in (self.df.loc[self.df["type"] == "sem_ctor"]).iterrows():
-            sem = int(elt["sem"])
-            semaphores[sem] = graph.Semaphore(sem, int(elt["count"]))
+        for elt in filter(lambda m: m["type"] == "sem_ctor", self.data):
+            sem = elt["sem"]
+            semaphores[sem] = graph.Semaphore(sem, elt["count"], sem)
 
-        addr_to_node: Dict[int, graph.Node] = {-1: graph.Node()}
+        addr_to_node: Dict[int, graph.Node] = {-1: graph.Node(InvalidPost)}
 
         # Add the root of a tree and create all the nodes.
         # The nodes with operation None represent a single task. 
         # The edges between nodes with None operation represent the order of creating the tasks.
 
         # Create all the nodes that have some incoming edges.
-        for (_, elt) in (self.df.loc[self.df["type"] == "edge"]).iterrows():
+        for elt in filter(lambda m: m["type"] == "edge", self.data):
             if not elt["post"] in addr_to_node:
-                addr_to_node[elt["post"]] = graph.Node()
+                addr_to_node[elt["post"]] = graph.Node(elt["post"])
 
-        for (_, elt) in (self.df.loc[self.df["type"] == "edge"]).iterrows():
+        for elt in filter(lambda m: m["type"] == "edge", self.data):
             # If there is no node with address of the start of the edge,
             # then it has no incoming edges, so we add it to the children of the root.
             if not elt["pre"] in addr_to_node:
-                node = graph.Node()
+                node = graph.Node(elt["post"])
                 addr_to_node[-1].add_child(node)
                 addr_to_node[elt["pre"]] = node
 
@@ -54,15 +53,13 @@ class GraphParser:
         # We iterate through all of the operations and add a node for each of them.
         # Operations in self.df are sorted by the timestamp so when we add 
         # a node, we preserve the order of operations.
-        for (_, elt) in self.df.iterrows():
+        for elt in filter(lambda m: m["type"] == "sem_wait" or m["type"] == "sem_signal", self.data):
             if elt["type"] == "sem_wait":
                 addr = elt["post"]
-                new_node = graph.Node(graph.Operation(elt["sem"], -elt["count"]))
-            elif elt["type"] == "sem_signal":
-                addr = elt["vertex"]
-                new_node = graph.Node(graph.Operation(elt["sem"], elt["count"]))
+                new_node = graph.Node(addr, graph.Operation(elt["sem"], -elt["count"]))
             else:
-                continue
+                addr = elt["vertex"]
+                new_node = graph.Node(addr, graph.Operation(elt["sem"], elt["count"]))
 
             # If the address 'addr' already maps to some Node,
             # then it means that there exist a task which run those operation.

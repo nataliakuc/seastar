@@ -4,9 +4,10 @@ import os
 import argparse
 from distutils.util import strtobool
 
+
 def test(test_file, output_file):
     with open(test_file) as testfile:
-        file = list(testfile)
+        file = testfile.readlines()
 
     with open(output_file) as output_file:
         a = output_file.readline()
@@ -15,9 +16,12 @@ def test(test_file, output_file):
     graph_parser = parser.GraphParser(file)
 
     graph, semaphores = graph_parser.build_graph()
+    res, execution = gr.Graph(graph, semaphores).is_deadlock_free()
 
-    if gr.Graph(graph, semaphores).is_deadlock_free() != output:
-        print(test_file)
+    if res != output:
+        print("\u001b[31m" + "The answer is incorrect \u001b[0m\n")
+    else:
+        print("\u001b[32m" + "The answer is correct \u001b[0m\n")
 
 
 def all_files_sorted(dir):
@@ -30,21 +34,11 @@ if __name__ == "__main__":
     argp = argparse.ArgumentParser()
     argp.add_argument("-dir", nargs=2, metavar=('tests', 'outputs'), help="directory of tests and directory of outputs",
                       default=["./tests", "./outputs"])
-    argp.add_argument("-file", help="the file to check for deadlock and print the result", default=None)
     args = argp.parse_args()
 
-    if args.file is None:
-        test_files = all_files_sorted(args.dir[0])
-        output_files = all_files_sorted(args.dir[1])
+    test_files = all_files_sorted(args.dir[0])
+    output_files = all_files_sorted(args.dir[1])
 
-        for i in range(len(test_files)):
-            print(test_files[i])
-            test(test_files[i], output_files[i])
-    else:
-        with open(args.file) as testfile:
-            file = list(testfile)
-
-        graphParser = parser.GraphParser(file)
-        graph, semaphores = graphParser.build_graph()
-
-        print(gr.Graph(graph, semaphores).is_deadlock_free())
+    for i in range(len(test_files)):
+        print(test_files[i])
+        test(test_files[i], output_files[i])
