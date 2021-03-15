@@ -1597,6 +1597,7 @@ private:
         typename futurator::type fut(future_for_get_promise_marker{});
         using pr_type = decltype(fut.get_promise());
         schedule(fut.get_promise(), std::move(func), [](pr_type&& pr, Func& func, future_state&& state) {
+            deadlock_detection::attach_func_type<Func>(&pr);
             if (state.failed()) {
                 deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), &pr);
                 pr.set_exception(static_cast<future_state_base&&>(std::move(state)));
@@ -1659,6 +1660,7 @@ public:
     then_wrapped(Func&& func) & noexcept {
         auto fut = then_wrapped_maybe_erase<false, FuncResult>(std::forward<Func>(func));
         deadlock_detection::trace_edge(this, &fut);
+        //deadlock_detection::attach_func_type<Func>(&fut);
         return fut;
     }
 
@@ -1668,6 +1670,7 @@ public:
     then_wrapped(Func&& func) && noexcept {
         auto fut = then_wrapped_maybe_erase<true, FuncResult>(std::forward<Func>(func));
         deadlock_detection::trace_edge(this, &fut);
+        //deadlock_detection::attach_func_type<Func>(&fut);
         return fut;
     }
 
@@ -1700,6 +1703,7 @@ private:
         typename futurator::type fut(future_for_get_promise_marker{});
         using pr_type = decltype(fut.get_promise());
         schedule(fut.get_promise(), std::move(func), [](pr_type&& pr, Func& func, future_state&& state) {
+            deadlock_detection::attach_func_type<Func>(&pr);
             futurator::satisfy_with_result_of(std::move(pr), [&func, &state] {
                 return func(future(std::move(state)));
             });
@@ -2027,6 +2031,7 @@ struct futurize : public internal::futurize_base<T> {
     template<typename Func, typename... FuncArgs>
     [[deprecated("Use invoke for varargs")]]
     static inline type apply(Func&& func, FuncArgs&&... args) noexcept {
+        deadlock_detection::attach_func_type<Func>(deadlock_detection::get_current_traced_ptr());
         return invoke(std::forward<Func>(func), std::forward<FuncArgs>(args)...);
     }
 
@@ -2139,6 +2144,7 @@ future<T...> make_exception_future_with_backtrace(Exception&& ex) noexcept {
 template<typename T>
 template<typename Func, typename... FuncArgs>
 typename futurize<T>::type futurize<T>::apply(Func&& func, std::tuple<FuncArgs...>&& args) noexcept {
+    deadlock_detection::attach_func_type<Func>(deadlock_detection::get_current_traced_ptr());
     try {
         using ret_t = decltype(std::apply(std::forward<Func>(func), std::move(args)));
         if constexpr (std::is_void_v<ret_t>) {
@@ -2160,6 +2166,8 @@ SEASTAR_CONCEPT( requires std::invocable<Func> )
 void futurize<T>::satisfy_with_result_of(promise_base_with_type&& pr, Func&& func) {
     using ret_t = decltype(func());
     deadlock_detection::trace_edge(deadlock_detection::get_current_traced_ptr(), &pr);
+    //deadlock_detection::attach_func_type<Func>(deadlock_detection::get_current_traced_ptr());
+    //deadlock_detection::attach_func_type<Func>(&pr);
     if constexpr (std::is_void_v<ret_t>) {
         func();
         pr.set_value();
@@ -2173,6 +2181,7 @@ void futurize<T>::satisfy_with_result_of(promise_base_with_type&& pr, Func&& fun
 template<typename T>
 template<typename Func, typename... FuncArgs>
 typename futurize<T>::type futurize<T>::invoke(Func&& func, FuncArgs&&... args) noexcept {
+    deadlock_detection::attach_func_type<Func>(deadlock_detection::get_current_traced_ptr());
     try {
         using ret_t = decltype(func(std::forward<FuncArgs>(args)...));
         if constexpr (std::is_void_v<ret_t>) {
