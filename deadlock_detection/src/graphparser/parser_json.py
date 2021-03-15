@@ -66,8 +66,9 @@ class Parser:
             obj["timestamp"] -= start_time
             self.add_event(obj)
     def output(self, file_name: str):
-        for line in self._log:
-            print(json.dumps(line))
+        with open(file_name, "w") as f:
+            for line in self._log:
+                print(json.dumps(line), file=f)
     def add_event(self, event: dict[str, Any]):
         event = dict(event.items())
         try:
