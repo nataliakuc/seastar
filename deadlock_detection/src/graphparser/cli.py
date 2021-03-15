@@ -2,7 +2,7 @@ import argparse
 from pathlib import PurePath
 
 from parser_json import Parser as ParserJson
-#from parser_svg import Parser as ParserSvg
+from parser_svg import Parser as ParserSvg
 
 def main():
     argp = argparse.ArgumentParser()
@@ -12,14 +12,13 @@ def main():
     args = argp.parse_args()
 
     #assert len(args.log_files) == 1
-    assert not args.svg
 
     output = args.output
     if output is None:
         input_file = PurePath(args.log_files[0])
         output = str(input_file.with_name(input_file.name + ".out.json"))
 
-    parser = ParserJson()
+    parser = ParserSvg() if args.svg else ParserJson()
 
     files = []
     for logfile_name in args.log_files:
@@ -29,3 +28,5 @@ def main():
     parser.add_files(files)
 
     parser.output(output)
+    if args.svg:
+        parser._write_svg("/tmp/deadlock.svg")

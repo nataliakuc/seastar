@@ -64,12 +64,7 @@ class GenerationCounter:
     def get_generation(self, address):
         if not isinstance(address, int):
             raise TypeError("not an integer")
-        try:
-            return self.generations[address]
-        except KeyError:
-            raise
-            self.add_vertex(address)
-            return self.generations[address]
+        return self.generations[address]
     def get_vertex(self, address):
         if not isinstance(address, int):
             raise TypeError("not an integer")
