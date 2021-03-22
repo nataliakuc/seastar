@@ -25,7 +25,7 @@
 #include <seastar/core/task.hh>
 #include <seastar/core/reactor.hh>
 #include <map>
-#include <fstream>
+#include <seastar/core/file.hh>
 #include <seastar/core/sstring.hh>
 
 struct json_object;
@@ -84,24 +84,149 @@ std::ostream& operator<<(std::ostream& s, const json_object& obj) {
     return s;
 }
 
+static bool global_can_trace = true;
+static bool global_started_trace = false;
+
+class tracer {
+public:
+    enum class state {
+        DISABLED,
+        RUNNING,
+        FLUSHING,
+    };
+private:
+    std::unique_ptr<seastar::future<>> _operation;
+    std::unique_ptr<seastar::condition_variable> _new_data;
+    std::stringstream _data;
+    state _state = state::DISABLED;
+    size_t _id;
+    size_t _file_size;
+    bool _disable_condition_signal = false;
+
+    static constexpr size_t chunk_size = 0x1000;
+    static constexpr size_t minimal_chunk_count = 64;
+
+    struct alignas(chunk_size) page {
+        unsigned char _data[chunk_size];
+    };
+
+    seastar::future<> loop(seastar::file file) {
+        _file_size = 0;
+        return seastar::do_with(std::move(file), [this](auto& file) {
+            return loop_impl(file);
+        });
+    }
+
+    seastar::future<> loop_impl(seastar::file& file) {
+        auto data = _data.str();
+        assert(_state != state::DISABLED);
+        if (_state == state::FLUSHING) {
+            return flush(file);
+        }
+        if (data.size() < chunk_size * minimal_chunk_count) {
+            return _new_data->wait().then([this, &file] {
+                return loop_impl(file);
+            });
+        } else {
+            size_t chunk_count = data.size() / chunk_size;
+            assert(chunk_count > 0);
+            size_t length = chunk_count * chunk_size;
+            auto buffer = std::make_unique<std::vector<page>>(chunk_count);
+            std::memcpy(buffer->data(), data.c_str(), length);
+            _data.str("");
+            _data << data.substr(length);
+            return file.dma_write(_file_size, buffer->data()->_data, length).then([this, length, &file, buffer = std::move(buffer)](size_t written) {
+                if (written != length) {
+                    throw std::exception();
+                }
+                _file_size += written;
+                return loop_impl(file);
+            });
+        }
+    }
+
+    seastar::future<> flush(seastar::file& file) {
+        auto data = _data.str();
+        size_t chunk_count = data.size() / chunk_size + 1;
+        size_t length = chunk_count * chunk_size;
+        auto buffer = std::make_unique<std::vector<page>>(chunk_count);
+        std::memcpy(buffer->data()->_data, data.c_str(), data.size());
+        std::memset(buffer->data()->_data + data.size(), ' ', length - data.size());
+        _data.str("");
+        return file.dma_write(_file_size, buffer->data()->_data, length).then([this, length, buffer = std::move(buffer)](size_t written) {
+            if (written != length) {
+                throw std::exception();
+            }
+            _file_size += written;
+            return seastar::make_ready_future<>();
+        }).then([this, &file, overflow = length - data.size()] {
+            return file.truncate(_file_size - overflow);
+        }).then([&file] {
+            return file.flush();
+        }).then([&file] {
+            return file.close();
+        });
+    }
+
+
+public:
+
+    tracer(size_t id) : _id(id) {}
+
+    ~tracer() {
+        assert(!_operation);
+    }
+
+    state state() const noexcept {
+        return _state;
+    }
+
+    void start() {
+        _new_data = std::make_unique<seastar::condition_variable>();
+        assert(_state == state::DISABLED);
+        _state = state::RUNNING;
+        auto init_future = seastar::open_file_dma(
+                fmt::format("deadlock_detection_graphdump.{}.json", _id),
+                seastar::open_flags::wo | seastar::open_flags::create | seastar::open_flags::truncate
+        ).then([this](seastar::file file) {
+            return loop(std::move(file));
+        });
+        _operation = std::make_unique<seastar::future<>>(std::move(init_future));
+    }
+
+    seastar::future<> stop() {
+        assert(_state == state::RUNNING);
+        _state = state::FLUSHING;
+        seastar::future<> operation = std::move(*_operation);
+        _operation.reset();
+        _new_data->signal();
+        return operation.then([this] {
+            assert(_state == state::FLUSHING);
+            _state = state::DISABLED;
+        });
+    }
+
+    void trace(const json_object& data) {
+        // Trace should be disabled while flushing.
+        assert(_state != state::FLUSHING);
+        _data << data << "\n";
+        if (_state != state::DISABLED && !_disable_condition_signal) {
+            _disable_condition_signal = true;
+            _new_data->signal();
+            _disable_condition_signal = false;
+        }
+    }
+};
 
 namespace seastar::deadlock_detection {
-
-bool operator==(const runtime_vertex& lhs, const runtime_vertex& rhs) {
-    return lhs._ptr == rhs._ptr && lhs._base_type->hash_code() == rhs._base_type->hash_code();
-}
-
-uintptr_t runtime_vertex::get_ptr() const noexcept {
-    return (uintptr_t)_ptr;
-}
 
 /// \brief Get output unique to each threads for dumping graph.
 ///
 /// For each thread creates unique file for dumping graph.
 /// Is thread and not shard-based because there are multiple threads in shard 0.
-static std::ostream& get_output_stream() {
-    static thread_local std::ofstream stream(fmt::format("deadlock_detection_graphdump.{}.json", gettid()));
-    return stream;
+static tracer& get_tracer() {
+    static thread_local tracer tracer(gettid());
+    return tracer;
 }
 
 /// Global variable for storing currently executed runtime graph vertex.
@@ -112,10 +237,18 @@ static runtime_vertex& current_traced_ptr() {
 
 /// Serializes and writes data to appropriate file.
 static void write_data(dumped_value data) {
+    // Here we check implication (can_trace & started_trace) => state == RUNNING.
+    // It should be true for any thread with initialized tracer.
+    // That should be reactor threads and not syscall threads.
+    assert(!(global_can_trace && global_started_trace) || (get_tracer().state() == tracer::state::RUNNING));
+
+    if (!global_can_trace) {
+        return;
+    }
     auto now = std::chrono::steady_clock::now();
     auto nanoseconds = std::chrono::nanoseconds(now.time_since_epoch()).count();
     data.emplace_back("timestamp", nanoseconds);
-    get_output_stream() << json_object(std::move(data)) << std::endl;
+    get_tracer().trace(json_object(data));
 }
 
 /// Converts runtime vertex to serializable data.
@@ -139,6 +272,46 @@ static dumped_value serialize_semaphore(const void* sem, size_t count) {
 static dumped_value serialize_semaphore_short(const void* sem) {
     return {{"address", reinterpret_cast<uintptr_t>(sem)}};
 }
+
+bool operator==(const runtime_vertex& lhs, const runtime_vertex& rhs) {
+    return lhs._ptr == rhs._ptr && lhs._base_type->hash_code() == rhs._base_type->hash_code();
+}
+
+uintptr_t runtime_vertex::get_ptr() const noexcept {
+    return (uintptr_t)_ptr;
+}
+
+void init_tracing() {
+    assert(global_can_trace == true);
+    assert(global_started_trace == false);
+}
+
+future<> start_tracing() {
+    return seastar::smp::invoke_on_all([] {
+        get_tracer().start();
+    }).discard_result().then([] {
+        assert(global_started_trace == false);
+        global_started_trace = true;
+    });
+}
+
+future<> stop_tracing() {
+    assert(global_can_trace == true);
+    global_can_trace = false;
+    return seastar::smp::invoke_on_all([] {
+        return get_tracer().stop();
+    }).discard_result().then([] {
+        assert(global_started_trace == true);
+        global_started_trace = false;
+    });
+}
+
+void delete_tracing() {
+    assert(global_can_trace == false);
+    assert(global_started_trace == false);
+    global_can_trace = true;
+}
+
 
 runtime_vertex get_current_traced_ptr() {
     return current_traced_ptr();
