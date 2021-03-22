@@ -185,14 +185,10 @@ constexpr void trace_semaphore_signal(const void*, size_t, const void*) {}
 constexpr void trace_semaphore_wait_completed(const void*, const void*) {}
 constexpr void trace_semaphore_wait(const void*, size_t, const void*, const void*) {}
 constexpr void attach_func_type(const void*, const char* = nullptr, const char* = nullptr, uint32_t = 0) {}
-void init_tracing() {}
-future<> start_tracing() {
-    return seastar::make_ready_future<>();
-}
-future<> stop_tracing() {
-    return seastar::make_ready_future<>();
-}
-void delete_tracing() {}
+constexpr void init_tracing() {}
+future<> start_tracing();
+future<> stop_tracing();
+constexpr void delete_tracing() {}
 
 constexpr std::nullptr_t get_current_traced_ptr() {
     return nullptr;

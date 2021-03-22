@@ -447,4 +447,14 @@ void trace_semaphore_wait(const void* sem, size_t count, runtime_vertex pre, run
 }
 
 }
+#else
+#include <seastar/core/future.hh>
+namespace seastar::deadlock_detection {
+future<> start_tracing() {
+    return seastar::make_ready_future<>();
+}
+future<> stop_tracing() {
+    return seastar::make_ready_future<>();
+}
+}
 #endif
