@@ -110,6 +110,21 @@ private:
         unsigned char _data[chunk_size];
     };
 
+    struct disable_wake {
+        bool _prev_val;
+        tracer* _tracer;
+        disable_wake(tracer& tracer) {
+            _prev_val = tracer._disable_condition_signal;
+            tracer._disable_condition_signal = true;
+            _tracer = &tracer;
+        }
+
+        ~disable_wake() {
+            assert(_tracer->_disable_condition_signal == true);
+            _tracer->_disable_condition_signal = _prev_val;
+        }
+    };
+
     seastar::future<> loop(seastar::file file) {
         _file_size = 0;
         return seastar::do_with(std::move(file), [this](auto& file) {
@@ -118,11 +133,12 @@ private:
     }
 
     seastar::future<> loop_impl(seastar::file& file) {
-        auto data = _data.str();
+        auto disable = disable_wake(*this);
         assert(_state != state::DISABLED);
         if (_state == state::FLUSHING) {
             return flush(file);
         }
+        auto data = _data.str();
         if (data.size() < chunk_size * minimal_chunk_count) {
             return _new_data->wait().then([this, &file] {
                 return loop_impl(file);
@@ -210,10 +226,13 @@ public:
         // Trace should be disabled while flushing.
         assert(_state != state::FLUSHING);
         _data << data << "\n";
+
         if (_state != state::DISABLED && !_disable_condition_signal) {
-            _disable_condition_signal = true;
-            _new_data->signal();
-            _disable_condition_signal = false;
+            if (_data.str().size() >= chunk_size * minimal_chunk_count) {
+                _disable_condition_signal = true;
+                _new_data->signal();
+                _disable_condition_signal = false;
+            }
         }
     }
 };
