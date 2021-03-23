@@ -95,20 +95,58 @@ public:
         FLUSHING,
     };
 private:
+    static constexpr size_t chunk_size = 0x1000;
+    static constexpr size_t minimal_chunk_count = 64;
+
+    struct alignas(chunk_size) page {
+        char _data[chunk_size];
+    };
+
+    struct buffer {
+        size_t _length = 0;
+        std::vector<page> _data{};
+
+        size_t capacity() const {
+            return _data.size() * sizeof(page);
+        }
+
+        char* start_ptr() {
+            return reinterpret_cast<char*>(_data.data()._data);
+        }
+        char* end_ptr() {
+            return start_ptr() + _length;
+        }
+
+        void write(const std::string_view& data) {
+            if (_length + data.size() > capacity()) {
+                size_t new_capacity = capacity() * 2 + data.size();
+                size_t new_size = new_capacity / sizeof(page) + 1;
+                _data.reserve(new_size);
+                _data.resize(new_size);
+            }
+
+            memcpy(end_ptr(), data.data(), data.size());
+            _length += data.size();
+        }
+
+        void reset() {
+            _length = 0;
+        }
+
+        size_t size() const {
+            return _length;
+        }
+    };
+
     std::unique_ptr<seastar::future<>> _operation;
     std::unique_ptr<seastar::condition_variable> _new_data;
-    std::stringstream _data;
+    buffer _trace_buffer;
+    buffer _write_buffer;
     state _state = state::DISABLED;
     size_t _id;
     size_t _file_size;
     bool _disable_condition_signal = false;
 
-    static constexpr size_t chunk_size = 0x1000;
-    static constexpr size_t minimal_chunk_count = 64;
-
-    struct alignas(chunk_size) page {
-        unsigned char _data[chunk_size];
-    };
 
     struct disable_wake {
         bool _prev_val;
@@ -138,23 +176,22 @@ private:
         if (_state == state::FLUSHING) {
             return flush(file);
         }
-        auto data = _data.str();
-        if (data.size() < chunk_size * minimal_chunk_count) {
+        if (_trace_buffer.size() < chunk_size * minimal_chunk_count) {
             return _new_data->wait().then([this, &file] {
                 return loop_impl(file);
             });
         } else {
-            size_t chunk_count = data.size() / chunk_size;
-            assert(chunk_count > 0);
+            std::swap(_trace_buffer, _write_buffer);
+            size_t chunk_count = _write_buffer.size() / chunk_size;
+            assert(chunk_count >= minimal_chunk_count);
             size_t length = chunk_count * chunk_size;
-            auto buffer = std::make_unique<std::vector<page>>(chunk_count);
-            std::memcpy(buffer->data(), data.c_str(), length);
-            _data.str("");
-            _data << data.substr(length);
-            return file.dma_write(_file_size, buffer->data()->_data, length).then([this, length, &file, buffer = std::move(buffer)](size_t written) {
-                if (written != length) {
+            _trace_buffer.write(std::string_view(_write_buffer.start_ptr() + length, _write_buffer.size() - length));
+            _write_buffer._length = length;
+            return file.dma_write(_file_size, _write_buffer.start_ptr(), length).then([this, &file](size_t written) {
+                if (written != _write_buffer.size()) {
                     throw std::exception();
                 }
+                _write_buffer.reset();
                 _file_size += written;
                 return loop_impl(file);
             });
@@ -162,20 +199,19 @@ private:
     }
 
     seastar::future<> flush(seastar::file& file) {
-        auto data = _data.str();
-        size_t chunk_count = data.size() / chunk_size + 1;
+        std::swap(_trace_buffer, _write_buffer);
+        size_t chunk_count = (_write_buffer.size() + chunk_size - 1) / chunk_size;
         size_t length = chunk_count * chunk_size;
-        auto buffer = std::make_unique<std::vector<page>>(chunk_count);
-        std::memcpy(buffer->data()->_data, data.c_str(), data.size());
-        std::memset(buffer->data()->_data + data.size(), ' ', length - data.size());
-        _data.str("");
-        return file.dma_write(_file_size, buffer->data()->_data, length).then([this, length, buffer = std::move(buffer)](size_t written) {
-            if (written != length) {
+        size_t overflow = length - _write_buffer.size();
+        _write_buffer._length = length;
+        return file.dma_write(_file_size, _write_buffer.start_ptr(), length).then([this](size_t written) {
+            if (written != _write_buffer.size()) {
                 throw std::exception();
             }
+            _write_buffer.reset();
             _file_size += written;
             return seastar::make_ready_future<>();
-        }).then([this, &file, overflow = length - data.size()] {
+        }).then([this, &file, overflow] {
             return file.truncate(_file_size - overflow);
         }).then([&file] {
             return file.flush();
@@ -225,10 +261,12 @@ public:
     void trace(const json_object& data) {
         // Trace should be disabled while flushing.
         assert(_state != state::FLUSHING);
-        _data << data << "\n";
+        std::stringstream s;
+        s << data << "\n";
+        _trace_buffer.write(s.str());
 
         if (_state != state::DISABLED && !_disable_condition_signal) {
-            if (_data.str().size() >= chunk_size * minimal_chunk_count) {
+            if (_trace_buffer.size() >= chunk_size * minimal_chunk_count) {
                 _disable_condition_signal = true;
                 _new_data->signal();
                 _disable_condition_signal = false;
