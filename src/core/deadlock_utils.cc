@@ -111,7 +111,7 @@ private:
         }
 
         char* start_ptr() {
-            return reinterpret_cast<char*>(_data.data()._data);
+            return reinterpret_cast<char*>(_data.data()->_data);
         }
         char* end_ptr() {
             return start_ptr() + _length;
