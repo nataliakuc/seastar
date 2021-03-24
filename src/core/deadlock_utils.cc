@@ -27,6 +27,7 @@
 #include <map>
 #include <seastar/core/file.hh>
 #include <seastar/core/sstring.hh>
+#include <proto/deadlock_trace.pb.h>
 
 struct json_object;
 
@@ -111,7 +112,7 @@ private:
         }
 
         char* start_ptr() {
-            return reinterpret_cast<char*>(_data.data()._data);
+            return reinterpret_cast<char*>(_data.data()->_data);
         }
         char* end_ptr() {
             return start_ptr() + _length;
