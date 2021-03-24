@@ -63,13 +63,22 @@ private:
         }
 
         void write(const seastar::deadlock_detection::deadlock_trace& data) {
-            size_t size = data.ByteSizeLong();
-            if (_length + size > capacity()) {
-                size_t new_capacity = capacity() * 2 + size;
+            assert(data.IsInitialized());
+            size_t data_size = data.ByteSizeLong();
+            assert(data_size <= UINT16_MAX);
+            uint16_t size = data_size;
+            size_t total_size = size + sizeof(size);
+            if (_length + total_size > capacity()) {
+                size_t new_capacity = capacity() * 2 + total_size;
                 size_t new_size = new_capacity / sizeof(page) + 1;
                 _data.reserve(new_size);
                 _data.resize(new_size);
             }
+
+
+            uint16_t written_size = htole16(size);
+            memcpy(end_ptr(), &written_size, sizeof(size));
+            _length += sizeof(size);
 
             bool result = data.SerializeToArray(end_ptr(), size);
             (void)result;
