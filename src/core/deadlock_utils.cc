@@ -29,62 +29,6 @@
 #include <seastar/core/sstring.hh>
 #include <proto/deadlock_trace.pb.h>
 
-struct json_object;
-
-using bigger_sstring = seastar::basic_sstring<char, uint32_t, 127>;
-using dumped_value = std::vector<std::pair<const char*, json_object>>;
-using dumped_type = std::variant<const char*, bigger_sstring, bool, uintmax_t, std::nullptr_t, dumped_value>;
-
-struct json_object {
-    dumped_type _value;
-    json_object(const char* value) {
-        if (value) {
-            _value = value;
-        } else {
-            _value = nullptr;
-        }
-    }
-    json_object(bigger_sstring value) : _value(std::move(value)) {}
-    json_object(dumped_value value) : _value(std::move(value)) {}
-    template <typename T, std::enable_if_t<!std::is_same_v<T, bool> && std::is_integral_v<T>, bool> = true>
-    json_object(T value) : _value(uintmax_t(value)) {}
-    template <typename T, std::enable_if_t<std::is_same_v<T, bool>, bool> = true>
-    json_object(T value) : _value(bool(value)) {}
-
-    friend std::ostream& operator<<(std::ostream& s, const json_object& obj);
-};
-
-template <typename> inline constexpr bool always_false_v = false;
-
-std::ostream& operator<<(std::ostream& s, const json_object& obj) {
-    std::visit([&s](const auto& arg) {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, const char*> or std::is_same_v<T, bigger_sstring>) {
-            s << "\"" << arg << "\"";
-        } else if constexpr (std::is_same_v<T, uintmax_t>) {
-            s << arg;
-        } else if constexpr (std::is_same_v<T, dumped_value>) {
-            s << "{";
-            bool started = false;
-            for (const auto& elem : arg) {
-                if (started) {
-                    s << ", ";
-                }
-                s << "\"" << elem.first << "\": " << elem.second;
-                started = true;
-            }
-            s << "}";
-        } else if constexpr (std::is_same_v<T, bool>) {
-            s << (arg ? "true" : "false");
-        } else if constexpr (std::is_same_v<T, std::nullptr_t>) {
-            s << "null";
-        } else {
-            static_assert(always_false_v<T>, "non-exhaustive visitor!");
-        }
-    }, obj._value);
-    return s;
-}
-
 static bool global_can_trace = true;
 static bool global_started_trace = false;
 
@@ -118,16 +62,32 @@ private:
             return start_ptr() + _length;
         }
 
-        void write(const std::string_view& data) {
-            if (_length + data.size() > capacity()) {
-                size_t new_capacity = capacity() * 2 + data.size();
+        void write(const seastar::deadlock_detection::deadlock_trace& data) {
+            size_t size = data.ByteSizeLong();
+            if (_length + size > capacity()) {
+                size_t new_capacity = capacity() * 2 + size;
                 size_t new_size = new_capacity / sizeof(page) + 1;
                 _data.reserve(new_size);
                 _data.resize(new_size);
             }
 
-            memcpy(end_ptr(), data.data(), data.size());
-            _length += data.size();
+            bool result = data.SerializeToArray(end_ptr(), size);
+            (void)result;
+            assert(result);
+            _length += size;
+        }
+
+        void write(const std::string_view& data) {
+            size_t size = data.size();
+            if (_length + size > capacity()) {
+                size_t new_capacity = capacity() * 2 + size;
+                size_t new_size = new_capacity / sizeof(page) + 1;
+                _data.reserve(new_size);
+                _data.resize(new_size);
+            }
+
+            memcpy(end_ptr(), data.data(), size);
+            _length += size;
         }
 
         void reset() {
@@ -259,12 +219,10 @@ public:
         });
     }
 
-    void trace(const json_object& data) {
+    void trace(const seastar::deadlock_detection::deadlock_trace& data) {
         // Trace should be disabled while flushing.
         assert(_state != state::FLUSHING);
-        std::stringstream s;
-        s << data << "\n";
-        _trace_buffer.write(s.str());
+        _trace_buffer.write(data);
 
         if (_state != state::DISABLED && !_disable_condition_signal) {
             if (_trace_buffer.size() >= chunk_size * minimal_chunk_count) {
@@ -294,7 +252,7 @@ static runtime_vertex& current_traced_ptr() {
 }
 
 /// Serializes and writes data to appropriate file.
-static void write_data(dumped_value data) {
+static void write_data(deadlock_trace& data) {
     // Here we check implication (can_trace & started_trace) => state == RUNNING.
     // It should be true for any thread with initialized tracer.
     // That should be reactor threads and not syscall threads.
@@ -305,30 +263,55 @@ static void write_data(dumped_value data) {
     }
     auto now = std::chrono::steady_clock::now();
     auto nanoseconds = std::chrono::nanoseconds(now.time_since_epoch()).count();
-    data.emplace_back("timestamp", nanoseconds);
-    get_tracer().trace(json_object(data));
+    data.set_timestamp(nanoseconds);
+    get_tracer().trace(data);
+}
+
+static void trace_string_id(const char* ptr, size_t id) {
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::STRING_ID);
+    data.set_value(id);
+    data.set_extra(ptr);
+    write_data(data);
+}
+
+static size_t get_string_id(const char* ptr) {
+    static thread_local std::unordered_map<const char*, size_t> ids;
+    static thread_local size_t next_id = 0;
+    auto it = ids.find(ptr);
+    if (it == ids.end()) {
+        size_t new_id = next_id++;
+        ids.emplace(ptr, new_id);
+
+        trace_string_id(ptr, new_id);
+
+        return new_id;
+    }
+
+    return it->second;
 }
 
 /// Converts runtime vertex to serializable data.
-static dumped_value serialize_vertex(runtime_vertex v) {
-    return {{"address", v.get_ptr()},
-            {"base_type", v._base_type->name()},
-            {"type", v._type->name()}};
+static void serialize_vertex(const runtime_vertex& v, deadlock_trace::typed_address* data) {
+    data->set_address(v.get_ptr());
+    data->set_type_id(get_string_id(v._type->name()));
 }
 
 /// Converts runtime vertex to serializable data without debug info.
-static dumped_value serialize_vertex_short(runtime_vertex v) {
-    return {{"address", v.get_ptr()}};
+static void serialize_vertex_short(const runtime_vertex& v, deadlock_trace::typed_address* data) {
+    data->set_address(v.get_ptr());
+    // data->clear_type_id();
 }
 
 /// Converts semaphore to serializable data.
-static dumped_value serialize_semaphore(const void* sem, size_t count) {
-    return {{"address", reinterpret_cast<uintptr_t>(sem)}, {"available_units", count}};
+static void serialize_semaphore(const void* sem, size_t count, deadlock_trace& data) {
+    data.set_sem(reinterpret_cast<uintptr_t>(sem));
+    data.set_value(count);
 }
 
 /// Converts semaphore to serializable data without debug info.
-static dumped_value serialize_semaphore_short(const void* sem) {
-    return {{"address", reinterpret_cast<uintptr_t>(sem)}};
+static uintptr_t serialize_semaphore_short(const void* sem) {
+    return reinterpret_cast<uintptr_t>(sem);
 }
 
 bool operator==(const runtime_vertex& lhs, const runtime_vertex& rhs) {
@@ -367,7 +350,6 @@ future<> stop_tracing() {
 void delete_tracing() {
     assert(global_can_trace == false);
     assert(global_started_trace == false);
-    global_can_trace = true;
 }
 
 
@@ -385,103 +367,91 @@ current_traced_vertex_updater::~current_traced_vertex_updater() {
 }
 
 void trace_edge(runtime_vertex pre, runtime_vertex post, bool speculative) {
-    dumped_value data{
-            {"type", "edge"},
-            {"pre", serialize_vertex(pre)},
-            {"post", serialize_vertex(post)},
-            {"speculative", speculative}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::EDGE);
+    serialize_vertex(pre, data.mutable_pre());
+    serialize_vertex(post, data.mutable_vertex());
+    data.set_value(speculative);
     write_data(data);
 }
 
 void trace_vertex_constructor(runtime_vertex v) {
-    dumped_value data{
-            {"type", "vertex_ctor"},
-            {"vertex", serialize_vertex(v)}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::VERTEX_CTOR);
+    serialize_vertex(v, data.mutable_vertex());
     write_data(data);
 }
 
 void trace_vertex_destructor(runtime_vertex v) {
-    dumped_value data{
-            {"type", "vertex_dtor"},
-            {"vertex", serialize_vertex(v)}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::VERTEX_DTOR);
+    serialize_vertex(v, data.mutable_vertex());
     write_data(data);
 }
 
 void trace_semaphore_constructor(const void* sem, size_t count) {
-    dumped_value data{
-            {"type", "sem_ctor"},
-            {"sem", serialize_semaphore(sem, count)}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::SEM_CTOR);
+    serialize_semaphore(sem, count, data);
     write_data(data);
 }
 
 void trace_semaphore_destructor(const void* sem, size_t count) {
-    dumped_value data{
-            {"type", "sem_dtor"},
-            {"sem", serialize_semaphore(sem, count)}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::SEM_DTOR);
+    serialize_semaphore(sem, count, data);
     write_data(data);
 }
 
 void attach_func_type(runtime_vertex ptr, const std::type_info& func_type, const char* file, uint32_t line) {
-    dumped_value data{
-            {"type", "attach_func_type"},
-            {"vertex", serialize_vertex(ptr)},
-            {"func_type", func_type.name()},
-            {"file", file},
-            {"line", line}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::FUNC_TYPE);
+    serialize_vertex(ptr, data.mutable_vertex());
+    data.set_value(get_string_id(func_type.name()));
+    data.set_extra(fmt::format("{}:{}", file, line));
     write_data(data);
 }
 
 void trace_move_vertex(runtime_vertex from, runtime_vertex to) {
-    dumped_value data{
-        {"type", "vertex_move"},
-        {"from", serialize_vertex_short(from)},
-        {"to", serialize_vertex_short(to)}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::VERTEX_MOVE);
+    serialize_vertex_short(to, data.mutable_vertex());
+    serialize_vertex_short(from, data.mutable_pre());
     write_data(data);
 }
 
 void trace_move_semaphore(const void* from, const void* to) {
-    dumped_value data{
-        {"type", "sem_move"},
-        {"from", serialize_semaphore_short(from)},
-        {"to", serialize_semaphore_short(to)}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::SEM_MOVE);
+    data.set_sem(serialize_semaphore_short(to));
+    data.mutable_pre()->set_address(serialize_semaphore_short(from));
     write_data(data);
 }
 
 void trace_semaphore_signal(const void* sem, size_t count, runtime_vertex caller) {
-    dumped_value data{
-            {"type", "sem_signal"},
-            {"sem", serialize_semaphore_short(sem)},
-            {"count", count},
-            {"vertex", caller.get_ptr()}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::SEM_SIGNAL);
+    data.set_sem(serialize_semaphore_short(sem));
+    data.set_value(count);
+    serialize_vertex_short(caller, data.mutable_vertex());
     write_data(data);
 }
 
 void trace_semaphore_wait_completed(const void* sem, runtime_vertex post) {
-    dumped_value data{
-            {"type", "sem_wait_completed"},
-            {"sem", serialize_semaphore_short(sem)},
-            {"post", serialize_vertex_short(post)}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::SEM_WAIT_CMPL);
+    data.set_sem(serialize_semaphore_short(sem));
+    serialize_vertex_short(post, data.mutable_vertex());
     write_data(data);
 }
 
 void trace_semaphore_wait(const void* sem, size_t count, runtime_vertex pre, runtime_vertex post) {
-    dumped_value data{
-            {"type", "sem_wait"},
-            {"sem", serialize_semaphore_short(sem)},
-            {"pre", serialize_vertex_short(pre)},
-            {"post", serialize_vertex_short(post)},
-            {"count", count}
-    };
+    static thread_local deadlock_trace data;
+    data.set_type(deadlock_trace::SEM_WAIT);
+    data.set_sem(serialize_semaphore_short(sem));
+    data.set_value(count);
+    serialize_vertex_short(post, data.mutable_vertex());
+    serialize_vertex_short(pre, data.mutable_pre());
     write_data(data);
 }
 
