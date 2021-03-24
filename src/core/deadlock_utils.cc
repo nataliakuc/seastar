@@ -99,13 +99,13 @@ private:
         }
     };
 
-    std::unique_ptr<seastar::future<>> _operation;
-    std::unique_ptr<seastar::condition_variable> _new_data;
-    buffer _trace_buffer;
-    buffer _write_buffer;
+    std::unique_ptr<seastar::future<>> _operation{};
+    std::unique_ptr<seastar::condition_variable> _new_data{};
+    buffer _trace_buffer{};
+    buffer _write_buffer{};
     state _state = state::DISABLED;
-    size_t _id;
-    size_t _file_size;
+    const size_t _id;
+    size_t _file_size = 0;
     bool _disable_condition_signal = false;
 
 
@@ -124,7 +124,7 @@ private:
         }
     };
 
-    seastar::future<> loop(seastar::file file) {
+    seastar::future<> loop(seastar::file&& file) {
         _file_size = 0;
         return seastar::do_with(std::move(file), [this](auto& file) {
             return loop_impl(file);
