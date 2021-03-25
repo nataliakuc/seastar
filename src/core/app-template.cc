@@ -121,10 +121,8 @@ app_template::run(int ac, char ** av, std::function<future<int> ()>&& func) {
             return futurize_invoke(func);
         }).finally([func_done] {
             func_done->set_value();
-        }).then([](int exit_code) {
-            return deadlock_detection::stop_tracing().then([exit_code] {
-                return exit_code;
-            });
+        }).finally([]() {
+            return deadlock_detection::stop_tracing();
         }).then([](int exit_code) {
             return engine().exit(exit_code);
         }).or_terminate();
