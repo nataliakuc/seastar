@@ -157,13 +157,9 @@ void inline attach_func_type(runtime_vertex ptr, const char* file = __builtin_FI
 void trace_move_vertex(runtime_vertex from, runtime_vertex to);
 void trace_move_semaphore(const void* from, const void* to);
 
-void init_tracing();
-
 future<void> start_tracing();
 
 future<void> stop_tracing();
-
-void delete_tracing();
 
 }
 
@@ -185,10 +181,8 @@ constexpr void trace_semaphore_signal(const void*, size_t, const void*) {}
 constexpr void trace_semaphore_wait_completed(const void*, const void*) {}
 constexpr void trace_semaphore_wait(const void*, size_t, const void*, const void*) {}
 constexpr void attach_func_type(const void*, const char* = nullptr, const char* = nullptr, uint32_t = 0) {}
-constexpr void init_tracing() {}
 future<> start_tracing();
 future<> stop_tracing();
-constexpr void delete_tracing() {}
 
 constexpr std::nullptr_t get_current_traced_ptr() {
     return nullptr;

@@ -208,9 +208,7 @@ app_template::run_deprecated(int ac, char ** av, std::function<void ()>&& func) 
             engine().exit(1);
         }
     });
-    deadlock_detection::init_tracing();
     auto exit_code = engine().run();
-    deadlock_detection::delete_tracing();
     smp::cleanup();
     return exit_code;
 }

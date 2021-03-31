@@ -337,8 +337,6 @@ uintptr_t runtime_vertex::get_ptr() const noexcept {
     return (uintptr_t)_ptr;
 }
 
-void init_tracing() {}
-
 future<> start_tracing() {
     return seastar::smp::invoke_on_all([] {
         get_tracer().start();
@@ -357,8 +355,6 @@ future<> stop_tracing() {
         });
     });
 }
-
-void delete_tracing() {}
 
 
 runtime_vertex get_current_traced_ptr() {
