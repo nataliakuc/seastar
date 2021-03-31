@@ -29,8 +29,8 @@
 #include <seastar/core/sstring.hh>
 #include <proto/deadlock_trace.pb.h>
 
-static bool global_can_trace = true;
-static bool global_started_trace = false;
+static thread_local bool local_can_append_trace = true;
+static thread_local bool local_trace_can_io = false;
 
 class tracer {
 public:
@@ -143,6 +143,7 @@ private:
     seastar::future<> loop_impl(seastar::file& file) {
         auto disable = disable_wake(*this);
         assert(_state != state::DISABLED);
+        assert(local_trace_can_io);
         if (_state == state::FLUSHING) {
             return flush(file);
         }
@@ -169,6 +170,9 @@ private:
     }
 
     seastar::future<> flush(seastar::file& file) {
+        assert(_state == state::FLUSHING);
+        assert(!local_can_append_trace);
+        assert(local_trace_can_io);
         std::swap(_trace_buffer, _write_buffer);
         size_t chunk_count = (_write_buffer.size() + chunk_size - 1) / chunk_size;
         size_t length = chunk_count * chunk_size;
@@ -262,12 +266,14 @@ static runtime_vertex& current_traced_ptr() {
 
 /// Serializes and writes data to appropriate file.
 static void write_data(deadlock_trace& data) {
-    // Here we check implication (can_trace & started_trace) => state == RUNNING.
+    // Here we check implication (can_append_trace & trace_can_io) => state == RUNNING.
     // It should be true for any thread with initialized tracer.
     // That should be reactor threads and not syscall threads.
-    assert(!(global_can_trace && global_started_trace) || (get_tracer().state() == tracer::state::RUNNING));
+    assert(!(local_can_append_trace && local_trace_can_io) || (get_tracer().state() == tracer::state::RUNNING));
+    // Here we check implication start == FLUSHING => (!can_append_trace & trace_can_io)
+    assert(!(get_tracer().state() == tracer::state::FLUSHING) || (!local_can_append_trace && local_trace_can_io));
 
-    if (!global_can_trace) {
+    if (!local_can_append_trace) {
         return;
     }
     auto now = std::chrono::steady_clock::now();
@@ -331,35 +337,28 @@ uintptr_t runtime_vertex::get_ptr() const noexcept {
     return (uintptr_t)_ptr;
 }
 
-void init_tracing() {
-    assert(global_can_trace == true);
-    assert(global_started_trace == false);
-}
+void init_tracing() {}
 
 future<> start_tracing() {
     return seastar::smp::invoke_on_all([] {
         get_tracer().start();
-    }).discard_result().then([] {
-        assert(global_started_trace == false);
-        global_started_trace = true;
-    });
+        assert(local_trace_can_io == false);
+        local_trace_can_io = true;
+    }).discard_result();
 }
 
 future<> stop_tracing() {
-    assert(global_can_trace == true);
-    global_can_trace = false;
     return seastar::smp::invoke_on_all([] {
-        return get_tracer().stop();
-    }).discard_result().then([] {
-        assert(global_started_trace == true);
-        global_started_trace = false;
+        assert(local_can_append_trace == true);
+        local_can_append_trace = false;
+        return get_tracer().stop().then([] {
+            assert(local_trace_can_io == true);
+            local_trace_can_io = false;
+        });
     });
 }
 
-void delete_tracing() {
-    assert(global_can_trace == false);
-    assert(global_started_trace == false);
-}
+void delete_tracing() {}
 
 
 runtime_vertex get_current_traced_ptr() {
