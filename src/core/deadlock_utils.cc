@@ -249,13 +249,19 @@ public:
 
 namespace seastar::deadlock_detection {
 
+static std::unique_ptr<tracer>& get_tracer_ptr() {
+    static thread_local std::unique_ptr<tracer> t = std::make_unique<tracer>(gettid());
+    return t;
+}
+
 /// \brief Get output unique to each threads for dumping graph.
 ///
 /// For each thread creates unique file for dumping graph.
 /// Is thread and not shard-based because there are multiple threads in shard 0.
 static tracer& get_tracer() {
-    static thread_local tracer tracer(gettid());
-    return tracer;
+    auto& tracer = get_tracer_ptr();
+    assert(tracer);
+    return *tracer;
 }
 
 /// Global variable for storing currently executed runtime graph vertex.
@@ -266,16 +272,15 @@ static runtime_vertex& current_traced_ptr() {
 
 /// Serializes and writes data to appropriate file.
 static void write_data(deadlock_trace& data) {
+    if (!local_can_append_trace) {
+        return;
+    }
     // Here we check implication (can_append_trace & trace_can_io) => state == RUNNING.
     // It should be true for any thread with initialized tracer.
     // That should be reactor threads and not syscall threads.
     assert(!(local_can_append_trace && local_trace_can_io) || (get_tracer().state() == tracer::state::RUNNING));
     // Here we check implication start == FLUSHING => (!can_append_trace & trace_can_io)
     assert(!(get_tracer().state() == tracer::state::FLUSHING) || (!local_can_append_trace && local_trace_can_io));
-
-    if (!local_can_append_trace) {
-        return;
-    }
     auto now = std::chrono::steady_clock::now();
     auto nanoseconds = std::chrono::nanoseconds(now.time_since_epoch()).count();
     data.set_timestamp(nanoseconds);
@@ -352,6 +357,8 @@ future<> stop_tracing() {
         return get_tracer().stop().then([] {
             assert(local_trace_can_io == true);
             local_trace_can_io = false;
+            // Delete tracer, because it can cause segfault in static destruction.
+            get_tracer_ptr().reset();
         });
     });
 }
