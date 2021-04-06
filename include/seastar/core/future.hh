@@ -1463,6 +1463,7 @@ public:
     [[gnu::always_inline]]
     value_type&& get() {
         wait();
+        deadlock_detection::trace_edge(this, deadlock_detection::get_current_traced_ptr());
         return get_available_state_ref().take();
     }
 
@@ -1481,6 +1482,7 @@ public:
     /// Equivalent to: \c std::get<0>(f.get()).
     using get0_return_type = typename future_state::get0_return_type;
     get0_return_type get0() {
+        deadlock_detection::trace_edge(this, deadlock_detection::get_current_traced_ptr());
 #if SEASTAR_API_LEVEL < 5
         return future_state::get0(get());
 #else

@@ -212,7 +212,7 @@ public:
         assert(_state == state::DISABLED);
         _state = state::RUNNING;
         auto init_future = seastar::open_file_dma(
-                fmt::format("deadlock_detection_graphdump.{}.json", _id),
+                fmt::format("deadlock_detection_graphdump.{}.proto", _id),
                 seastar::open_flags::wo | seastar::open_flags::create | seastar::open_flags::truncate
         ).then([this](seastar::file file) {
             return loop(std::move(file));
